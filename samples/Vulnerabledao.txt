@@ -1,0 +1,23 @@
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
+ 
+public class VulnerableDao {
+ 
+    public void findUser(Connection conn, String username) throws Exception {
+        Statement stmt = conn.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT * FROM users WHERE name = '" + username + "'");
+        while (rs.next()) {
+            System.out.println(rs.getString("email"));
+        }
+    }
+ 
+    public void findOrders(Connection conn, String customerId, String status) throws Exception {
+        Statement stmt = conn.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT * FROM orders WHERE customer = '" + customerId + "' AND status = '" + status + "'");
+        while (rs.next()) {
+            System.out.println(rs.getString("id"));
+        }
+    }
+}
+ 
