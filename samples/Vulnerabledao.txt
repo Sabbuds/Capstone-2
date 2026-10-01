@@ -19,5 +19,20 @@ public class VulnerableDao {
             System.out.println(rs.getString("id"));
         }
     }
+    public void findOrderDetails(Connection conn, String customerId, String status, String region) throws Exception {
+    Statement stmt = conn.createStatement();
+    ResultSet rs = stmt.executeQuery("SELECT * FROM orders WHERE customer = '" + customerId + "' AND status = '" + status + "' AND region = '" + region + "'");
+    while (rs.next()) {
+        System.out.println(rs.getString("id"));
+    }
+}
+public void findUserById(Connection conn, String userId) throws Exception {
+    Statement stmt = conn.createStatement();
+    ResultSet rs = stmt.executeQuery(userId + "SELECT * FROM users");
+    while (rs.next()) {
+        System.out.println(rs.getString("email"));
+    }
+}
+
 }
  

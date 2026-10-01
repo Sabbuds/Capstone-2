@@ -62,56 +62,105 @@ public class NaiveSqliRepair implements RepairStrategy {
         }
         String declaration = before.substring(0, eq + 1).strip();
  
-        List<String> parts = splitTopLevelPlus(args);
-        if (parts.size() != 3) {
+ List<String> parts = splitTopLevelPlus(args);
+
+// The query should alternate between SQL string literals and dynamic values.
+// Example: literal + value + literal + value + literal
+if (parts.size() < 3 || parts.size() % 2 == 0) {
+    return RepairOutcome.refused(
+        "expected alternating SQL literals and dynamic values");
+}
+
+// Store each dynamic value that will become a PreparedStatement parameter
+List<String> values = new ArrayList<>();
+
+for (int i = 0; i < parts.size(); i++) {
+
+    if (i % 2 == 0) {
+        // Even positions should be SQL string literals
+        if (!isStringLiteral(parts.get(i))) {
             return RepairOutcome.refused(
-                "expected literal + value + literal, found " + parts.size() + " concatenated parts");
+                "expected SQL string literal at part " + i);
         }
- 
-        String left = parts.get(0);
-        String value = parts.get(1);
-        String right = parts.get(2);
- 
-        if (!isStringLiteral(left) || !isStringLiteral(right)) {
-            return RepairOutcome.refused("the parts either side of the value are not string literals");
+    } else {
+        // Odd positions should be dynamic values
+        String value = parts.get(i).strip();
+
+        if (value.isEmpty()) {
+            return RepairOutcome.refused(
+                "empty dynamic value at part " + i);
         }
- 
-        String leftInner = left.substring(1, left.length() - 1);
-        String rightInner = right.substring(1, right.length() - 1);
- 
-        boolean leftQuoted = leftInner.endsWith("'");
-        boolean rightQuoted = rightInner.startsWith("'");
-        if (leftQuoted != rightQuoted) {
-            return RepairOutcome.refused("the SQL quotes around the value are unbalanced");
+
+        values.add(value);
+    }
+}
+      
+ StringBuilder sqlBuilder = new StringBuilder();
+
+for (int i = 0; i < parts.size(); i++) {
+
+    if (i % 2 == 0) {
+        // Remove the surrounding Java double quotes
+        String literal = parts.get(i);
+        String inner = literal.substring(1, literal.length() - 1);
+
+        // Remove SQL single quotes surrounding a dynamic value
+        if (i < parts.size() - 1 && inner.endsWith("'")) {
+            inner = inner.substring(0, inner.length() - 1);
         }
-        if (leftQuoted) {
-            leftInner = leftInner.substring(0, leftInner.length() - 1);
-            rightInner = rightInner.substring(1);
+
+        if (i > 0 && inner.startsWith("'")) {
+            inner = inner.substring(1);
         }
+
+        sqlBuilder.append(inner);
+
+    } else {
+        // Replace each dynamic value with a parameter placeholder
+        sqlBuilder.append("?");
+    }
+}
+       
+
  
         String conn = findConnectionVariable(sourceCode);
         if (conn == null) {
             return RepairOutcome.refused("no Connection variable found in this file");
         }
+
+ // Build the final parameterized SQL statement using the ? placeholders
+        String sql = "\"" + sqlBuilder.toString() + "\"";
  
-        String sql = "\"" + leftInner + "?" + rightInner + "\"";
- 
+ // Build a new version of the source code containing the repaired query
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < lines.length; i++) {
             if (i == idx) {
+                 // Create the PreparedStatement using the parameterized SQL query
                 out.append(indent)
                    .append("PreparedStatement __ps = ").append(conn)
                    .append(".prepareStatement(").append(sql).append(");\n");
-                out.append(indent)
-                   .append("__ps.setString(1, ").append(value).append(");\n");
+
+ // Bind each dynamic value to its corresponding placeholder
+        for (int paramIndex = 0; paramIndex < values.size(); paramIndex++) {
+            out.append(indent)
+               .append("__ps.setString(")
+               .append(paramIndex + 1)
+               .append(", ")
+               .append(values.get(paramIndex))
+               .append(");\n");
+        }
+// Execute the repaired query using the PreparedStatement
                 out.append(indent)
                    .append(declaration).append(" __ps.executeQuery();");
+
             } else {
                 out.append(lines[i]);
             }
+
             if (i < lines.length - 1) {
                 out.append("\n");
             }
+
         }
  
         return RepairOutcome.patched(new Patch(
