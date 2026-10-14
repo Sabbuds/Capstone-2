@@ -55,12 +55,165 @@ public class NaiveSqliRepair implements RepairStrategy {
  
         String before = body.substring(0, sinkAt);
         String args = body.substring(sinkAt + SINK.length(), body.length() - 2);
- 
         int eq = before.indexOf('=');
-        if (eq < 0) {
-            return RepairOutcome.refused("the result is not assigned to a variable");
+
+if (eq < 0) {
+    return RepairOutcome.refused(
+        "the result is not assigned to a variable"
+    );
+}
+
+String declaration = before.substring(0, eq + 1).strip();
+
+        // Check whether executeQuery uses a variable instead of direct SQL.
+        boolean queryStoredInVariable = args.matches("[A-Za-z_$][\\w$]*");
+
+        if (queryStoredInVariable) {
+            String expression = findQueryExpression(
+                sourceCode, args.strip(), idx
+            );
+
+            if (expression == null) {
+                return RepairOutcome.refused(
+                    "could not locate the SQL query variable"
+                );
+            }
+
+            if (isQueryReassigned(sourceCode, args.strip(), idx)) {
+                return RepairOutcome.refused(
+                    "query variable is reassigned before execution"
+                );
+            }
+
+            int declarationLine = findQueryDeclarationLine(
+                sourceCode, args.strip(), idx
+            );
+
+            if (declarationLine < 0) {
+                return RepairOutcome.refused(
+                    "could not locate the query declaration"
+                );
+            }
+
+            if (hasOtherQueryUses(
+                    sourceCode, args.strip(), declarationLine, idx)) {
+                return RepairOutcome.refused(
+                    "query variable is used elsewhere"
+                );
+            }
+
+            List<String> queryParts = splitTopLevelPlus(expression);
+
+if (queryParts.size() != 3
+        || !isStringLiteral(queryParts.get(0))
+        || !isStringLiteral(queryParts.get(2))) {
+    return RepairOutcome.refused(
+        "unsupported variable-query expression"
+    );
+}
+
+String value = queryParts.get(1).strip();
+
+if (!value.matches("[A-Za-z_$][\\w$]*")) {
+    return RepairOutcome.refused(
+        "only simple variable parameters are supported"
+    );
+}
+String firstLiteral = queryParts.get(0);
+String lastLiteral = queryParts.get(2);
+
+String prefix = firstLiteral.substring(
+    1, firstLiteral.length() - 1
+);
+
+String suffix = lastLiteral.substring(
+    1, lastLiteral.length() - 1
+);
+
+if (!prefix.endsWith("'") || !suffix.startsWith("'")) {
+    return RepairOutcome.refused(
+        "only quoted SQL string values are supported"
+    );
+}
+
+String parameterizedSql =
+    prefix.substring(0, prefix.length() - 1)
+    + "?"
+    + suffix.substring(1);
+    Pattern stringParameter = Pattern.compile(
+    "\\bString\\s+" + Pattern.quote(value) + "\\b"
+);
+
+if (!stringParameter.matcher(sourceCode).find()) {
+    return RepairOutcome.refused(
+        "parameter is not a recognized String variable"
+    );
+}
+String conn = findConnectionVariable(sourceCode);
+
+if (conn == null) {
+    return RepairOutcome.refused(
+        "no Connection variable found for the repair"
+    );
+}
+if (Pattern.compile("\\b__ps\\b")
+        .matcher(sourceCode).find()) {
+    return RepairOutcome.refused(
+        "PreparedStatement variable name already exists"
+    );
+}
+
+// Build the replacement SQL declaration.
+String repairedQueryLine =
+    indent + "String " + args.strip()
+    + " = \"" + parameterizedSql + "\";";
+
+// Build the PreparedStatement code.
+String preparedStatementCode =
+    indent + "java.sql.PreparedStatement __ps = "
+    + conn + ".prepareStatement(" + args.strip() + ");\n"
+    + indent + "__ps.setString(1, " + value + ");\n"
+    + indent + declaration + " __ps.executeQuery();";
+
+String originalDeclaration = lines[declarationLine].strip();
+String expectedDeclaration = "String " + args.strip() + " =";
+
+if (!originalDeclaration.equals(expectedDeclaration)) {
+    return RepairOutcome.refused(
+        "only simple two-line query declarations are supported"
+    );
+}
+    String[] patchedLines = lines.clone();
+
+// Replace the original query declaration.
+patchedLines[declarationLine] = repairedQueryLine;
+
+// Handle a query declaration that spans two lines.
+if (lines[declarationLine].strip().endsWith("=")) {
+    if (declarationLine + 1 >= idx
+            || !lines[declarationLine + 1].strip().equals(expression + ";")) {
+        return RepairOutcome.refused(
+            "unsupported multi-line query declaration"
+        );
+    }
+
+    patchedLines[declarationLine + 1] = "";
+}
+
+// Replace the original SQL execution.
+patchedLines[idx] = preparedStatementCode;
+
+String patchedSource = String.join("\n", patchedLines);
+
+    return RepairOutcome.patched(new Patch(
+    finding.file(),
+    sourceCode,
+    patchedSource,
+    "Replaced the variable-based SQL query with a parameterized PreparedStatement."
+));
         }
-        String declaration = before.substring(0, eq + 1).strip();
+
+      
  
  List<String> parts = splitTopLevelPlus(args);
 
@@ -169,6 +322,7 @@ for (int i = 0; i < parts.size(); i++) {
             out.toString(),
             "Replaced string concatenation with a parameterised query."));
     }
+
  
     /** Splits on '+' that sit outside string literals and parentheses. */
     private static List<String> splitTopLevelPlus(String s) {
@@ -214,6 +368,100 @@ for (int i = 0; i < parts.size(); i++) {
         return s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"");
     }
  
+   private static String findQueryExpression(
+        String sourceCode, String variableName, int beforeLine) {
+
+    String[] lines = sourceCode.split("\n", -1);
+
+    Pattern assignment = Pattern.compile(
+        "\\bString\\s+" + Pattern.quote(variableName)
+        + "\\s*=\\s*(.*)"
+    );
+
+    for (int i = beforeLine - 1; i >= 0; i--) {
+        Matcher matcher = assignment.matcher(lines[i]);
+
+        if (matcher.find()) {
+            String expression = matcher.group(1).strip();
+
+            // Handle an expression starting on the next line.
+            if (expression.isEmpty() && i + 1 < beforeLine) {
+                expression = lines[i + 1].strip();
+            }
+
+            if (expression.endsWith(";")) {
+                expression = expression.substring(
+                    0, expression.length() - 1
+                ).strip();
+            }
+
+            return expression.isEmpty() ? null : expression;
+        }
+    }
+
+    return null;
+}
+private static boolean isQueryReassigned(
+        String sourceCode, String variableName, int beforeLine) {
+
+    String[] lines = sourceCode.split("\n", -1);
+
+    Pattern assignment = Pattern.compile(
+        "\\b" + Pattern.quote(variableName) + "\\s*=(?!=)"
+    );
+
+    int assignmentCount = 0;
+
+    for (int i = 0; i < beforeLine; i++) {
+        Matcher matcher = assignment.matcher(lines[i]);
+
+        while (matcher.find()) {
+            assignmentCount++;
+        }
+    }
+
+    return assignmentCount > 1;
+}
+private static boolean hasOtherQueryUses(
+        String sourceCode, String variableName, int declarationLine,
+        int executionLine) {
+
+    String[] lines = sourceCode.split("\n", -1);
+
+    Pattern usage = Pattern.compile(
+        "\\b" + Pattern.quote(variableName) + "\\b"
+    );
+
+    for (int i = declarationLine + 1; i < lines.length; i++) {
+        if (i == executionLine) {
+            continue;
+        }
+
+        if (usage.matcher(lines[i]).find()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+private static int findQueryDeclarationLine(
+        String sourceCode, String variableName, int beforeLine) {
+
+    String[] lines = sourceCode.split("\n", -1);
+
+    Pattern declaration = Pattern.compile(
+        "\\bString\\s+" + Pattern.quote(variableName) + "\\s*="
+    );
+
+    for (int i = beforeLine - 1; i >= 0; i--) {
+        if (declaration.matcher(lines[i]).find()) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
     private static String findConnectionVariable(String sourceCode) {
         Matcher m = CONNECTION_DECL.matcher(sourceCode);
         return m.find() ? m.group(1) : null;

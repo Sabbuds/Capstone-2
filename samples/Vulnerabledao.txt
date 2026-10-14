@@ -33,6 +33,22 @@ public void findUserById(Connection conn, String userId) throws Exception {
         System.out.println(rs.getString("email"));
     }
 }
+public void findUserByName(Connection conn, String username)
+        throws Exception {
+
+    Statement stmt = conn.createStatement();
+
+    String query =
+        "SELECT * FROM users WHERE name = '" + username + "'";
+
+
+    ResultSet rs = stmt.executeQuery(query);
+
+    while (rs.next()) {
+        System.out.println(rs.getString("email"));
+    }
+
+}
 
 }
  
