@@ -19,7 +19,11 @@ import java.util.regex.Pattern;
  */
 public class NaiveSqliRepair implements RepairStrategy {
  
-    private static final String SINK = ".executeQuery(";
+private static final String QUERY_SINK = ".executeQuery(";
+private static final String UPDATE_SINK = ".executeUpdate(";
+private static final String LARGE_UPDATE_SINK = ".executeLargeUpdate(";
+private static final String EXECUTE_SINK = ".execute(";
+private static final String BATCH_SINK = ".addBatch(";
  
     private static final Pattern CONNECTION_DECL =
         Pattern.compile("\\bConnection\\s+(\\w+)");
@@ -44,17 +48,245 @@ public class NaiveSqliRepair implements RepairStrategy {
         String line = lines[idx];
         String indent = line.substring(0, line.length() - line.stripLeading().length());
         String body = line.strip();
+     if (body.contains(BATCH_SINK)) {
+    String statementVariable = findBatchStatementVariable(body);
+
+    if (statementVariable == null) {
+        return RepairOutcome.refused(
+            "could not identify the batch Statement variable"
+        );
+    }
+
+    int executionLine = findBatchExecutionLine(
+        lines, statementVariable, idx
+    );
+
+    if (executionLine < 0) {
+        return RepairOutcome.refused(
+            "could not find matching executeBatch() call"
+        );
+    }
+
+    if (hasMultipleBatchCalls(lines, statementVariable)) {
+    return RepairOutcome.refused(
+        "multiple addBatch() calls are not supported"
+    );
+}
+
+
+String batchConnection = findBatchConnection(
+    lines, statementVariable, idx
+);
+
+if (batchConnection == null) {
+    return RepairOutcome.refused(
+        "could not identify the original Statement connection"
+    );
+}
+
+if (executionLine != idx + 1) {
+    return RepairOutcome.refused(
+        "only consecutive addBatch() and executeBatch() calls are supported"
+    );
+}
+
+String expectedExecution =
+    statementVariable + ".executeBatch();";
+
+if (!lines[executionLine].strip().equals(expectedExecution)) {
+    return RepairOutcome.refused(
+        "unsupported executeBatch() statement format"
+    );
+}
+
+String expectedBatchPrefix = statementVariable + BATCH_SINK;
+
+if (!body.startsWith(expectedBatchPrefix)
+        || !body.endsWith(");")) {
+    return RepairOutcome.refused(
+        "unsupported addBatch() statement format"
+    );
+}
+
+String batchArgs = body.substring(
+    expectedBatchPrefix.length(),
+    body.length() - 2
+).strip();
+
+List<String> batchParts = splitTopLevelPlus(batchArgs);
+
+if (batchParts.size() != 3
+        || !isStringLiteral(batchParts.get(0))
+        || !isStringLiteral(batchParts.get(2))
+        || !batchParts.get(1).matches("[A-Za-z_$][\\w$]*")) {
+    return RepairOutcome.refused(
+        "only single-parameter SQL concatenation is supported"
+    );
+}
+String batchPrefix = batchParts.get(0);
+String batchSuffix = batchParts.get(2);
+String batchValue = batchParts.get(1).strip();
+
+String prefixText = batchPrefix.substring(
+    1, batchPrefix.length() - 1
+);
+
+String suffixText = batchSuffix.substring(
+    1, batchSuffix.length() - 1
+);
+
+if (!prefixText.endsWith("'")
+        || !suffixText.startsWith("'")) {
+    return RepairOutcome.refused(
+        "only quoted SQL string values are supported"
+    );
+}
+Pattern batchStringParameter = Pattern.compile(
+    "\\bString\\s+" + Pattern.quote(batchValue) + "\\b"
+);
+
+if (!batchStringParameter.matcher(sourceCode).find()) {
+    return RepairOutcome.refused(
+        "batch parameter is not a recognized String variable"
+    );
+}
+
+String parameterizedBatchSql =
+    prefixText.substring(0, prefixText.length() - 1)
+    + "?"
+    + suffixText.substring(1);
+
+String batchSqlLiteral = "\"" + parameterizedBatchSql + "\"";
+
+int batchDeclarationLine = findBatchDeclarationLine(
+    lines, statementVariable, idx
+);
+
+if (batchDeclarationLine < 0) {
+    return RepairOutcome.refused(
+        "could not identify a unique Statement declaration"
+    );
+}
+if (hasOtherStatementUses(
+        lines, statementVariable, idx,
+        executionLine, batchDeclarationLine)) {
+    return RepairOutcome.refused(
+        "Statement is used elsewhere; batch repair is unsafe"
+    );
+}
+
+if (batchDeclarationLine != idx - 1) {
+    return RepairOutcome.refused(
+        "only consecutive Statement declaration and batch calls are supported"
+    );
+}
+
+String declarationText = lines[batchDeclarationLine].strip();
+String batchText = lines[idx].strip();
+String executionText = lines[executionLine].strip();
+
+if (declarationText.contains("{")
+        || declarationText.contains("}")
+        || batchText.contains("{")
+        || batchText.contains("}")
+        || executionText.contains("{")
+        || executionText.contains("}")) {
+    return RepairOutcome.refused(
+        "batch repair does not support inline block boundaries"
+    );
+}
+if (Pattern.compile("\\b__ps\\b")
+        .matcher(sourceCode).find()) {
+    return RepairOutcome.refused(
+        "PreparedStatement variable name already exists"
+    );
+}
+String repairedBatchDeclaration =
+    indent + "java.sql.PreparedStatement __ps = "
+    + batchConnection + ".prepareStatement("
+    + batchSqlLiteral + ");";
+
+String repairedBatchAddition =
+    indent + "__ps.setString(1, " + batchValue + ");\n"
+    + indent + "__ps.addBatch();";
+
+String repairedBatchExecution =
+    indent + "__ps.executeBatch();";
+
+    if (!lines[batchDeclarationLine].startsWith(indent)
+        || !lines[executionLine].startsWith(indent)
+        || !lines[batchDeclarationLine]
+            .substring(0, lines[batchDeclarationLine].length()
+                - lines[batchDeclarationLine].stripLeading().length())
+            .equals(indent)
+        || !lines[executionLine]
+            .substring(0, lines[executionLine].length()
+                - lines[executionLine].stripLeading().length())
+            .equals(indent)) {
+    return RepairOutcome.refused(
+        "batch statements must have matching indentation"
+    );
+}
+String sourceBeforeBatch = String.join(
+    "\n",
+    java.util.Arrays.copyOfRange(lines, 0, batchDeclarationLine)
+);
+
+if (sourceBeforeBatch.matches(
+        "(?s).*\\b(if|else|for|while|switch|try|catch|finally)\\s*\\([^)]*\\)\\s*\\{[^}]*$")) {
+    return RepairOutcome.refused(
+        "batch repair inside complex control flow is not supported"
+    );
+}
+String[] patchedBatchLines = lines.clone();
+
+patchedBatchLines[batchDeclarationLine] =
+    repairedBatchDeclaration;
+
+patchedBatchLines[idx] =
+    repairedBatchAddition;
+
+patchedBatchLines[executionLine] =
+    repairedBatchExecution;
+
+String patchedBatchSource =
+    String.join("\n", patchedBatchLines);
+
+    return RepairOutcome.patched(new Patch(
+    finding.file(),
+    sourceCode,
+    patchedBatchSource,
+    "Replaced vulnerable addBatch SQL with a parameterized PreparedStatement."
+));
+
+}
  
-        int sinkAt = body.indexOf(SINK);
-        if (sinkAt < 0) {
-            return RepairOutcome.refused("only handles .executeQuery(...)");
-        }
+  boolean isLargeUpdate = body.contains(LARGE_UPDATE_SINK);
+boolean isUpdate = body.contains(UPDATE_SINK);
+boolean isExecute = body.contains(EXECUTE_SINK);
+
+String sink = isLargeUpdate
+    ? LARGE_UPDATE_SINK
+    : isUpdate
+        ? UPDATE_SINK
+        : isExecute
+            ? EXECUTE_SINK
+            : QUERY_SINK;
+
+int sinkAt = body.indexOf(sink);
+
+if (sinkAt < 0) {
+   return RepairOutcome.refused(
+    "only handles .executeQuery(...), .executeUpdate(...), "
+    + ".executeLargeUpdate(...), or .execute(...)"
+);
+}
         if (!body.endsWith(");")) {
             return RepairOutcome.refused("the statement does not end on this line");
         }
  
         String before = body.substring(0, sinkAt);
-        String args = body.substring(sinkAt + SINK.length(), body.length() - 2);
+        String args = body.substring(sinkAt + sink.length(), body.length() - 2);
         int eq = before.indexOf('=');
 
 if (eq < 0) {
@@ -173,7 +405,15 @@ String preparedStatementCode =
     indent + "java.sql.PreparedStatement __ps = "
     + conn + ".prepareStatement(" + args.strip() + ");\n"
     + indent + "__ps.setString(1, " + value + ");\n"
-    + indent + declaration + " __ps.executeQuery();";
+    + indent + declaration
++ (isLargeUpdate
+    ? " __ps.executeLargeUpdate();"
+    : isUpdate
+        ? " __ps.executeUpdate();"
+        : isExecute
+            ? " __ps.execute();"
+            : " __ps.executeQuery();");
+
 
 String originalDeclaration = lines[declarationLine].strip();
 String expectedDeclaration = "String " + args.strip() + " =";
@@ -247,7 +487,24 @@ for (int i = 0; i < parts.size(); i++) {
         values.add(value);
     }
 }
-      
+    for (int i = 1; i < parts.size(); i += 2) {
+    String previousLiteral = parts.get(i - 1);
+    String nextLiteral = parts.get(i + 1);
+
+    String prefix = previousLiteral.substring(
+        1, previousLiteral.length() - 1
+    );
+
+    String suffix = nextLiteral.substring(
+        1, nextLiteral.length() - 1
+    );
+
+    if (!prefix.endsWith("'") || !suffix.startsWith("'")) {
+        return RepairOutcome.refused(
+            "only quoted SQL values can be safely parameterized"
+        );
+    }
+}  
  StringBuilder sqlBuilder = new StringBuilder();
 
 for (int i = 0; i < parts.size(); i++) {
@@ -275,7 +532,12 @@ for (int i = 0; i < parts.size(); i++) {
 }
        
 
- 
+ if (Pattern.compile("\\b__ps\\b")
+        .matcher(sourceCode).find()) {
+    return RepairOutcome.refused(
+        "PreparedStatement variable name already exists"
+    );
+}
         String conn = findConnectionVariable(sourceCode);
         if (conn == null) {
             return RepairOutcome.refused("no Connection variable found in this file");
@@ -290,7 +552,7 @@ for (int i = 0; i < parts.size(); i++) {
             if (i == idx) {
                  // Create the PreparedStatement using the parameterized SQL query
                 out.append(indent)
-                   .append("PreparedStatement __ps = ").append(conn)
+                   .append("java.sql.PreparedStatement __ps = ").append(conn)
                    .append(".prepareStatement(").append(sql).append(");\n");
 
  // Bind each dynamic value to its corresponding placeholder
@@ -303,8 +565,15 @@ for (int i = 0; i < parts.size(); i++) {
                .append(");\n");
         }
 // Execute the repaired query using the PreparedStatement
-                out.append(indent)
-                   .append(declaration).append(" __ps.executeQuery();");
+out.append(indent)
+   .append(declaration)
+   .append(isLargeUpdate
+       ? " __ps.executeLargeUpdate();"
+       : isUpdate
+           ? " __ps.executeUpdate();"
+           : isExecute
+               ? " __ps.execute();"
+               : " __ps.executeQuery();");
 
             } else {
                 out.append(lines[i]);
@@ -466,4 +735,127 @@ private static int findQueryDeclarationLine(
         Matcher m = CONNECTION_DECL.matcher(sourceCode);
         return m.find() ? m.group(1) : null;
     }
+    private static String findBatchStatementVariable(String body) {
+    int sinkAt = body.indexOf(BATCH_SINK);
+
+    if (sinkAt < 0) {
+        return null;
+    }
+
+    String before = body.substring(0, sinkAt).strip();
+
+    if (!before.matches("[A-Za-z_$][\\w$]*")) {
+        return null;
+    }
+
+    return before;
+}
+private static int findBatchExecutionLine(
+        String[] lines, String statementVariable, int batchLine) {
+
+    Pattern execution = Pattern.compile(
+        "\\b" + Pattern.quote(statementVariable)
+        + "\\s*\\.\\s*executeBatch\\s*\\(\\s*\\)"
+    );
+
+    for (int i = batchLine + 1; i < lines.length; i++) {
+        if (execution.matcher(lines[i]).find()) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+private static boolean hasMultipleBatchCalls(
+        String[] lines, String statementVariable) {
+
+    Pattern batchCall = Pattern.compile(
+        "\\b" + Pattern.quote(statementVariable)
+        + "\\s*\\.\\s*addBatch\\s*\\("
+    );
+
+    int count = 0;
+
+    for (String line : lines) {
+        if (batchCall.matcher(line).find()) {
+            count++;
+        }
+    }
+
+    return count > 1;
+}
+private static boolean hasOtherStatementUses(
+        String[] lines, String statementVariable,
+        int batchLine, int executionLine,
+        int batchDeclarationLine) {
+
+    Pattern usage = Pattern.compile(
+        "\\b" + Pattern.quote(statementVariable) + "\\b"
+    );
+
+    for (int i = 0; i < lines.length; i++) {
+        if (i == batchLine || i == executionLine) {
+            continue;
+        }
+
+        String line = lines[i].strip();
+
+       // Ignore only the identified Statement declaration.
+if (i == batchDeclarationLine) {
+    continue;
+}
+
+        if (usage.matcher(line).find()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+private static String findBatchConnection(
+        String[] lines, String statementVariable,
+        int batchLine) {
+
+    Pattern declaration = Pattern.compile(
+        "^(?:java\\.sql\\.)?Statement\\s+"
+        + Pattern.quote(statementVariable)
+        + "\\s*=\\s*([A-Za-z_$][\\w$]*)"
+        + "\\.createStatement\\s*\\(\\s*\\)\\s*;"
+    );
+
+    for (int i = batchLine - 1; i >= 0; i--) {
+        Matcher matcher = declaration.matcher(lines[i].strip());
+
+        if (matcher.matches()) {
+            return matcher.group(1);
+        }
+    }
+
+    return null;
+}
+private static int findBatchDeclarationLine(
+        String[] lines, String statementVariable,
+        int batchLine) {
+
+    Pattern declaration = Pattern.compile(
+        "^(?:java\\.sql\\.)?Statement\\s+"
+        + Pattern.quote(statementVariable)
+        + "\\s*=\\s*[A-Za-z_$][\\w$]*"
+        + "\\.createStatement\\s*\\(\\s*\\)\\s*;"
+    );
+
+    int foundLine = -1;
+
+    for (int i = 0; i < batchLine; i++) {
+        if (declaration.matcher(lines[i].strip()).matches()) {
+            if (foundLine != -1) {
+                return -1;
+            }
+            foundLine = i;
+        }
+    }
+
+    return foundLine;
+}
+
 }
