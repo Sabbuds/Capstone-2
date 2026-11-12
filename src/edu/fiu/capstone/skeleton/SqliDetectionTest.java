@@ -447,6 +447,20 @@ public class SqliDetectionTest {
             "class Dao { void run(java.sql.Statement stmt) throws Exception { String q = \"SELECT 1\"; try { q = Constants.sql(); } catch(Exception e) { stmt.executeQuery(q); } } } class Constants { static String sql() { return \"SELECT 1\"; } }", 0);
         test(lens, "Narrowing numeric cast keeps reachable sink",
             "if ((byte)256 == 0) stmt.executeQuery(\"SELECT * FROM \" + input);", 1);
+        test(lens, "Arithmetic proves safe branch",
+            "int n=106; String q=(7*18)+n>200 ? \"SELECT 1\" : input; stmt.executeQuery(q);", 0);
+        test(lens, "Arithmetic overflow follows JVM",
+            "if (2147483647+1 < 0) stmt.executeQuery(\"SELECT * FROM \"+input);", 1);
+        test(lens, "Shift masks distance like JVM",
+            "if ((1 << 32) == 1) stmt.executeQuery(\"SELECT * FROM \"+input);", 1);
+        test(lens, "Spring unknown receiver SQL query",
+            "template.queryForObject(\"SELECT * FROM \"+input, Long.class);", 1);
+        test(lens, "Spring prepared query value",
+            "template.queryForObject(\"SELECT * FROM users WHERE name=?\", Long.class, input);", 0);
+        test(lens, "Spring row set",
+            "JdbcTemplate template=provider(); template.queryForRowSet(\"SELECT * FROM \"+input);", 1);
+        test(lens, "Unrelated queryForObject",
+            "class Search { Object queryForObject(String s) { return null; } } new Search().queryForObject(\"SELECT * FROM \"+input);", 0);
 
         try {
             lens.analyze("Broken.java", "stmt.executeQuery(\"unterminated);");
