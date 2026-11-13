@@ -1,8 +1,31 @@
+
 package edu.fiu.capstone.skeleton;
-import java.util.regex.Pattern;
+
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class CommandInjectionRepair implements RepairStrategy {
+
+    // Matches:
+    // Runtime.exec(new String[]{"sh", "-c", "cat " + filename});
+    // Runtime.exec(new String[]{"bash", "-c", "cat " + filename});
+    // new ProcessBuilder("sh", "-c", "cat " + filename).start();
+    // new ProcessBuilder("bash", "-c", "cat " + filename).start();
+
+    private static final Pattern RUNTIME_PATTERN = Pattern.compile(
+        "^Runtime\\.getRuntime\\(\\)\\.exec\\(\\s*"
+        + "new\\s+String\\s*\\[\\s*\\]\\s*\\{\\s*"
+        + "\"(?:sh|bash)\"\\s*,\\s*\"-c\"\\s*,\\s*"
+        + "\"cat \"\\s*\\+\\s*([A-Za-z_$][\\w$]*)"
+        + "\\s*\\}\\s*\\)\\s*;$"
+    );
+
+    private static final Pattern PROCESS_BUILDER_PATTERN = Pattern.compile(
+        "^new\\s+ProcessBuilder\\(\\s*"
+        + "\"(?:sh|bash)\"\\s*,\\s*\"-c\"\\s*,\\s*"
+        + "\"cat \"\\s*\\+\\s*([A-Za-z_$][\\w$]*)"
+        + "\\s*\\)\\.start\\(\\)\\s*;$"
+    );
 
     @Override
     public String id() {
@@ -12,95 +35,110 @@ public class CommandInjectionRepair implements RepairStrategy {
     @Override
     public RepairOutcome attempt(Finding finding, String sourceCode) {
 
-        if (!"CWE-78".equals(finding.cwe())) {
+        if (finding == null || sourceCode == null) {
             return RepairOutcome.refused(
-                "This repair only handles command injection (CWE-78)"
+                "Missing finding or source code"
             );
         }
-      String[] lines = sourceCode.split("\\r?\\n", -1);
 
-int lineIndex = finding.line() - 1;
+        if (!"CWE-78".equals(finding.cwe())) {
+            return RepairOutcome.refused(
+                "This repair only supports CWE-78"
+            );
+        }
 
-if (lineIndex < 0 || lineIndex >= lines.length) {
-    return RepairOutcome.refused(
-        "The reported vulnerability line is outside the source file"
-    );
-}
+        // The target application must use GNU cat on Linux.
+        // This property is a declared target profile, not
+        // automatic verification of the target environment.
+        if (!"linux-gnu-cat".equals(
+                System.getProperty("capstone.target.commandProfile"))) {
+            return RepairOutcome.refused(
+                "Unsupported or unverified target command profile"
+            );
+        }
 
-String vulnerableLine = lines[lineIndex].strip();
+        // Support LF and CRLF, but not standalone CR.
+        if (sourceCode.contains("\r")
+                && !sourceCode.contains("\r\n")) {
+            return RepairOutcome.refused(
+                "Unsupported line endings"
+            );
+        }
 
-if (!vulnerableLine.contains("Runtime.getRuntime().exec(")) {
-    return RepairOutcome.refused(
-        "Only direct Runtime.getRuntime().exec() calls are supported"
-    );
-}
-if (!vulnerableLine.contains("\"sh\"")
-        || !vulnerableLine.contains("\"-c\"")) {
+        String newline =
+            sourceCode.contains("\r\n") ? "\r\n" : "\n";
 
-    return RepairOutcome.refused(
-        "Only sh -c command execution is supported"
-    );
-}
+        String[] lines =
+            sourceCode.split("\\r?\\n", -1);
 
-if (!vulnerableLine.contains("\"cat \"")) {
-    return RepairOutcome.refused(
-        "Only simple cat commands are supported"
-    );
-}
-Pattern commandPattern = Pattern.compile(
-    "^Runtime\\.getRuntime\\(\\)\\.exec\\(new String\\[\\]\\s*\\{\\s*"
-    + "\"sh\"\\s*,\\s*\"-c\"\\s*,\\s*\"cat \"\\s*\\+\\s*"
-    + "([A-Za-z_$][\\w$]*)\\s*\\}\\s*\\);$"
-);
+        int lineIndex = finding.line() - 1;
 
-Matcher matcher = commandPattern.matcher(vulnerableLine);
+        if (lineIndex < 0 || lineIndex >= lines.length) {
+            return RepairOutcome.refused(
+                "Invalid vulnerability line number"
+            );
+        }
 
-if (!matcher.matches()) {
-    return RepairOutcome.refused(
-        "Unsupported command structure"
-    );
-}
+        String originalLine = lines[lineIndex];
+        String vulnerableLine = originalLine.strip();
 
-String filenameVariable = matcher.group(1);
-String repairedLine =
-    "new ProcessBuilder(\"cat\", \"--\", "
-    + filenameVariable + ").start();";
-    String originalLine = lines[lineIndex];
+        Matcher runtimeMatcher =
+            RUNTIME_PATTERN.matcher(vulnerableLine);
 
-String indentation = originalLine.substring(
-    0,
-    originalLine.length() - originalLine.stripLeading().length()
-);
+        Matcher builderMatcher =
+            PROCESS_BUILDER_PATTERN.matcher(vulnerableLine);
 
-lines[lineIndex] = indentation + repairedLine;
+        String filenameVariable;
 
-String lineSeparator = sourceCode.contains("\r\n") ? "\r\n" : "\n";
+        if (runtimeMatcher.matches()) {
+            filenameVariable = runtimeMatcher.group(1);
 
-String patchedSource = String.join(lineSeparator, lines);
+        } else if (builderMatcher.matches()) {
+            filenameVariable = builderMatcher.group(1);
 
+        } else {
+            return RepairOutcome.refused(
+                "Unsupported command injection structure"
+            );
+        }
 
-    return createPatch(
-    finding,
-    sourceCode,
-    patchedSource
-);
+        // Prototype check for a String declaration.
+        // A future AST-based repair should verify actual
+        // symbol resolution and scope.
+        Pattern stringDeclaration = Pattern.compile(
+            "\\bString\\s+"
+            + Pattern.quote(filenameVariable)
+            + "\\b"
+        );
 
+        if (!stringDeclaration.matcher(sourceCode).find()) {
+            return RepairOutcome.refused(
+                "Could not verify String filename declaration"
+            );
+        }
 
+        String indentation = originalLine.substring(
+            0,
+            originalLine.length()
+                - originalLine.stripLeading().length()
+        );
+
+        String repairedLine =
+            "new ProcessBuilder(\"cat\", \"--\", "
+            + filenameVariable + ").start();";
+
+        lines[lineIndex] = indentation + repairedLine;
+
+        String patchedSource =
+            String.join(newline, lines);
+
+        return RepairOutcome.patched(
+            new Patch(
+                finding.file(),
+                sourceCode,
+                patchedSource,
+                "Replaced shell-based cat execution with direct ProcessBuilder arguments."
+            )
+        );
     }
-    
-    
-
-    private RepairOutcome createPatch(
-            Finding finding,
-            String originalSource,
-            String repairedSource) {
-
-        return RepairOutcome.patched(new Patch(
-            finding.file(),
-            originalSource,
-            repairedSource,
-            "Replaced vulnerable command execution with a safer implementation."
-        ));
-    }
-
 }
