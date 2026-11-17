@@ -1,0 +1,1163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Scanner</title>
+<script>
+  /* Apply the saved theme before first paint to avoid a flash. */
+  try { const t = localStorage.getItem("scanner-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f2f1ed;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #6e6c66;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --accent: #2a78d6;
+  --correct: #2a78d6;   /* categorical slot 1 */
+  --error: #eb6834;     /* categorical slot 2 */
+  --good: #0ca30c;
+  --good-text: #006300;
+  --critical: #d03b3b;
+  --hl-fixed: rgba(12,163,12,0.10);
+  --hl-manual: rgba(208,59,59,0.10);
+  --diff-add: rgba(12,163,12,0.12);
+  --diff-del: rgba(208,59,59,0.12);
+  --warn-bg: #fff6e0;
+  --warn-ink: #6b4a00;
+  --overlay: rgba(249,249,247,0.92);
+  --t-k: #7c3aed;
+  --t-s: #116329;
+  --t-c: #6e6c66;
+  --t-n: #a14f00;
+  --t-a: #1f5fae;
+  --mono: ui-monospace, "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+}
+.code, .diff, .snip, .summary-msg, .loc, code { font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232322; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8f8d86;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --accent: #3987e5; --correct: #3987e5;
+    --error: #d95926; --good-text: #0ca30c; --critical: #e66767; --hl-fixed: rgba(12,163,12,0.16);
+    --hl-manual: rgba(230,103,103,0.16); --diff-add: rgba(12,163,12,0.18); --diff-del: rgba(230,103,103,0.18);
+    --warn-bg: #2e2510; --warn-ink: #f2cf7a; --overlay: rgba(13,13,13,0.9);
+    --t-k: #c4a7ff; --t-s: #8fd18a; --t-c: #8f8d86; --t-n: #f0a35e; --t-a: #7fb2f0;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232322; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8f8d86;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --accent: #3987e5; --correct: #3987e5;
+  --error: #d95926; --good-text: #0ca30c; --critical: #e66767; --hl-fixed: rgba(12,163,12,0.16);
+  --hl-manual: rgba(230,103,103,0.16); --diff-add: rgba(12,163,12,0.18); --diff-del: rgba(230,103,103,0.18);
+  --warn-bg: #2e2510; --warn-ink: #f2cf7a; --overlay: rgba(13,13,13,0.9);
+  --t-k: #c4a7ff; --t-s: #8fd18a; --t-c: #8f8d86; --t-n: #f0a35e; --t-a: #7fb2f0;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1400px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+header p { margin: 2px 0 0; color: var(--ink-2); }
+.meta-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.pill { display: inline-flex; gap: 6px; align-items: center; font: inherit; font-size: 12.5px; padding: 3px 10px; min-height: 28px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); }
+.pill.on .pill-icon { color: var(--good); font-weight: 700; }
+.pill.off .pill-icon { color: var(--muted); font-weight: 700; }
+button.pill { cursor: pointer; }
+.picker { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.hint { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 520px; text-align: right; }
+@media (max-width: 760px) {
+  .picker { align-items: flex-start; }
+  .controls { justify-content: flex-start; }
+  .hint { text-align: left; }
+}
+select, button, .upload {
+  font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 12px; min-height: 36px; cursor: pointer;
+}
+select { min-width: 220px; max-width: 100%; }
+button.primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+button:disabled, select:disabled { opacity: 0.6; cursor: not-allowed; }
+.upload input { display: none; }
+.upload.disabled { opacity: 0.6; cursor: not-allowed; }
+.or, .muted { color: var(--muted); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.status-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin: 0 0 12px; color: var(--ink-2); }
+.spinner { width: 14px; height: 14px; border: 2px solid var(--grid); border-top-color: var(--accent); border-radius: 50%;
+  display: inline-block; animation: spin 0.8s linear infinite; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+#content { transition: opacity 0.15s; }
+#content.stale { opacity: 0.45; pointer-events: none; }
+.drop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; pointer-events: none;
+  background: var(--overlay); border: 3px dashed var(--accent); font-size: 20px; font-weight: 600; color: var(--ink); text-align: center; padding: 16px; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+.card h2 { font-size: 15px; margin: 0 0 4px; }
+.card .sub { color: var(--ink-2); margin: 0 0 12px; font-size: 13px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.card-head h2 { margin: 0; }
+.card-head .seg { margin: 0; }
+
+.notice { border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
+.notice.error { background: var(--hl-manual); border: 1px solid var(--critical); }
+.notice.warn { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--border); }
+.notice summary { cursor: pointer; font-weight: 600; }
+.dgroups { display: grid; gap: 10px; margin-top: 10px; font-size: 13px; max-height: 320px; overflow: auto; }
+.dgroup p { margin: 2px 0 4px; }
+.dgroup ul { margin: 0; padding-left: 20px; }
+.dgroup code { font: 12px var(--mono); }
+.dgroup .loc { color: inherit; }
+.empty { color: var(--ink-2); padding: 40px 0; text-align: center; }
+
+.resultbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--ink-2); }
+.resultbar b { color: var(--ink); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actions button { min-height: 32px; padding: 4px 12px; font-size: 13px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile .label { color: var(--ink-2); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.tile .value { font-size: 28px; font-weight: 600; margin-top: 2px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.side { display: grid; gap: 16px; min-width: 0; }
+
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.tab { font-size: 12.5px; padding: 4px 10px; min-height: 30px; border-radius: 999px; display: inline-flex; gap: 6px; align-items: center; }
+.tab[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: transparent; }
+.tab .count { font-variant-numeric: tabular-nums; opacity: 0.75; }
+.code {
+  position: relative; font: 12.5px/1.6 var(--mono); background: var(--surface-2); border-radius: 8px;
+  overflow: auto; max-height: 72vh; padding: 6px 0;
+}
+.row { display: grid; grid-template-columns: 24px 44px max-content; min-width: 100%; }
+.row .mk { text-align: center; font-weight: 700; }
+.row .ln { color: var(--muted); text-align: right; padding-right: 12px; user-select: none; font-variant-numeric: tabular-nums; }
+.row .tx { white-space: pre; padding-right: 16px; }
+.row.fixed { background: var(--hl-fixed); }
+.row.fixed .mk { color: var(--good); }
+.row.manual { background: var(--hl-manual); }
+.row.manual .mk { color: var(--critical); }
+.row.added { background: var(--diff-add); }
+.row.added .mk { color: var(--good); }
+.row.flash { box-shadow: inset 3px 0 0 var(--accent); background-color: color-mix(in srgb, var(--accent) 14%, transparent); }
+.anno { margin: 2px 12px 6px 68px; padding: 4px 8px; border-left: 3px solid var(--border); border-radius: 4px;
+  font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; white-space: normal; background: var(--surface); color: var(--ink-2); }
+.anno b { color: var(--ink); font-weight: 600; }
+.anno.fixed { border-left-color: var(--good); }
+.anno.manual { border-left-color: var(--critical); }
+.t-k { color: var(--t-k); }
+.t-s { color: var(--t-s); }
+.t-c { color: var(--t-c); font-style: italic; }
+.t-n { color: var(--t-n); }
+.t-a { color: var(--t-a); }
+
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 4px; }
+.filters .spacer { flex: 1; }
+.filter { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink-2); }
+.filter select { min-width: 0; padding: 4px 8px; min-height: 30px; font-size: 13px; }
+.group h3 { font-size: 14px; margin: 16px 0 2px; display: flex; gap: 6px; align-items: center; }
+.list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.finding { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface); min-width: 0; overflow-wrap: anywhere; }
+.finding > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; min-width: 0; padding: 2px 0; }
+.finding > summary::-webkit-details-marker { display: none; }
+.finding > summary::before { content: "▸"; color: var(--muted); transition: transform 0.15s; }
+.finding[open] > summary::before { transform: rotate(90deg); }
+.summary-msg { font: 12px var(--mono); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.badge { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.status { font-size: 12px; font-weight: 700; display: inline-flex; gap: 4px; align-items: center; }
+.status.fixed { color: var(--good-text); }
+.status.manual { color: var(--critical); }
+.loc { font: 12.5px var(--mono); color: var(--accent); background: none; border: 0; padding: 0; min-height: 0; text-decoration: underline; cursor: pointer; white-space: nowrap; }
+.finding .msg { margin: 8px 0 6px; color: var(--ink-2); font-size: 13px; }
+.finding .snip { font: 12px/1.5 var(--mono); background: var(--surface-2); border-radius: 6px; padding: 6px 8px; overflow-x: auto; white-space: pre; }
+.finding .why { font-size: 13px; margin: 8px 0 0; }
+.finding .why b { font-weight: 600; }
+.finding .raw { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+.finding .raw code { font: 12px var(--mono); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.row-actions button { min-height: 30px; padding: 3px 10px; font-size: 12.5px; }
+details.change summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.diff { font: 12px/1.55 var(--mono); background: var(--surface-2); border-radius: 6px; overflow-x: auto; margin-top: 6px; padding: 4px 0; }
+.diff div { white-space: pre; padding: 0 10px; min-width: max-content; }
+.diff .add { background: var(--diff-add); }
+.diff .del { background: var(--diff-del); }
+.diff .gap { color: var(--muted); }
+
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+.seg button { border: 0; border-radius: 0; min-height: 30px; padding: 4px 12px; font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--muted); font-size: 11px; }
+.chart text.val { fill: var(--ink); font-size: 12px; font-weight: 600; }
+.chart text.cat { fill: var(--ink-2); font-size: 12px; font-weight: 600; }
+.chart .hit { fill: transparent; cursor: pointer; }
+.chart .hit:focus { outline: none; }
+.chart .hit:focus-visible { stroke: var(--accent); stroke-width: 2; }
+.chart g:hover .bar, .chart g:focus-within .bar { opacity: 0.8; }
+.chart .bar.dim { opacity: 0.3; }
+.tip {
+  position: absolute; pointer-events: none; background: var(--ink); color: var(--surface);
+  font-size: 12px; padding: 6px 8px; border-radius: 6px; max-width: 220px; transform: translate(-50%, -100%); white-space: normal;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.metrics div { background: var(--surface-2); border-radius: 8px; padding: 6px 10px; }
+.metrics .k { color: var(--ink-2); font-size: 12px; }
+.metrics .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.linkish { background: none; border: 0; padding: 0; min-height: 0; color: var(--accent); font-size: 13px; text-decoration: underline; }
+table.cm { border-collapse: collapse; margin-top: 10px; font-size: 13px; width: 100%; }
+table.cm th, table.cm td { border: 1px solid var(--grid); padding: 0; text-align: center; }
+table.cm th { color: var(--ink-2); font-weight: 600; padding: 6px 8px; }
+table.cm td button { width: 100%; border: 0; border-radius: 0; background: none; min-height: 34px; font-variant-numeric: tabular-nums; }
+table.cm td button[aria-pressed="true"] { background: var(--surface-2); font-weight: 700; }
+.cases { margin-top: 12px; border-top: 1px solid var(--grid); padding-top: 10px; font-size: 13px; }
+.cases-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.cases-head .linkish { margin-left: auto; }
+.cases ul { margin: 6px 0 0; padding-left: 18px; max-height: 240px; overflow: auto; }
+.cases li { margin: 2px 0; }
+.note { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Security Scanner</h1>
+      <p>SQL injection (CWE-89) and command injection (CWE-78) detection with automatic repair proposals</p>
+      <div class="meta-row">
+        <span class="pill off" id="profile-badge"><span class="pill-icon" aria-hidden="true">–</span>Command repair: checking…</span>
+        <button class="pill" id="theme" type="button" aria-label="Color theme: automatic. Select to change.">Theme: Auto</button>
+      </div>
+    </div>
+    <div class="picker">
+      <div class="controls">
+        <label class="sr" for="target">Sample to scan</label>
+        <select id="target" aria-describedby="target-hint"></select>
+        <button class="primary" id="scan" type="button">Scan</button>
+        <span class="or">or</span>
+        <label class="upload"><input id="files" type="file" multiple accept=".java,.properties,.sh,.bat">Upload files…</label>
+        <label class="upload"><input id="folder" type="file" webkitdirectory multiple>Upload folder…</label>
+      </div>
+      <p class="hint" id="target-hint" aria-live="polite"></p>
+    </div>
+  </header>
+
+  <div class="status-line" id="status" hidden><span class="spinner" aria-hidden="true"></span><span id="status-text" role="status"></span><span class="muted" id="status-time" aria-hidden="true"></span></div>
+  <div id="notices"></div>
+  <div id="content"><div class="empty">Choose a sample, upload Java files, or drop a project folder anywhere on this page.</div></div>
+</div>
+<div class="drop" id="drop" hidden>Drop .java files or a project folder to scan</div>
+
+<script>
+"use strict";
+/* =============================== constants =============================== */
+const STATUS = {
+  fixed: { icon: "✓", label: "Fixed automatically" },
+  manual: { icon: "!", label: "Needs manual fix" },
+};
+const BARS = [
+  { key: "tp", label: "TP", name: "True positives", kind: "correct", help: "Vulnerable methods correctly flagged" },
+  { key: "fn", label: "FN", name: "False negatives", kind: "error", help: "Vulnerable methods the scanner missed" },
+  { key: "fp", label: "FP", name: "False positives", kind: "error", help: "Safe methods flagged by mistake" },
+  { key: "tn", label: "TN", name: "True negatives", kind: "correct", help: "Safe methods correctly passed" },
+];
+const EXCLUDED_DIRS = new Set([".git", ".benchmark-cache", "out", "target", "build", "node_modules", ".gradle"]);
+const SUPPORTED = /\.(java|properties|sh|bat)$/i;
+const MAX_UPLOAD_BYTES = 6 * 1024 * 1024;   /* server accepts 8 MB of base64, about 6 MB of source */
+
+/* Plain-language explanations for the repairers' refusal messages; the original text is always shown too. */
+const REFUSALS = [
+  [/target command profile/i, "Automatic command repair is turned off. Start the UI with .\\scripts\\ui.ps1 -CommandProfile linux-gnu-cat if the application runs GNU cat on Linux."],
+  [/Unsupported command injection structure/i, "The repairer only rewrites one command shape: sh -c \"cat \" + fileName. Other commands need a person to choose a safe design, usually a fixed program with separate arguments."],
+  [/Could not verify String filename/i, "The repairer could not confirm that the inserted value is a String variable, so a rewrite might not compile."],
+  [/does not end on this line/i, "The statement continues onto another line, or has something after the semicolon such as a comment. The repairer only rewrites a single complete line."],
+  [/not assigned to a variable/i, "The query result is not stored in a variable (as in ResultSet rs = …). The repairer only rewrites that form."],
+  [/only handles \.executeQuery/i, "The vulnerable call is not executeQuery, executeUpdate or execute. For example, prepareStatement with SQL that was already built from user input."],
+  [/Statement connection|no Connection variable/i, "The repairer could not tell which database connection created this statement, so it cannot create the safer PreparedStatement."],
+  [/alternating SQL literals|expected SQL string literal|empty dynamic value/i, "The query is not just quoted text joined with values. Part of the SQL structure itself (such as a column name or keyword) comes from input, and a ? placeholder can only replace values. A person needs to restrict it, for example with an allowlist."],
+  [/only quoted SQL/i, "Only values inside quotes ('…') can become ? placeholders. This value is not quoted, for example a number or a column name."],
+  [/single-parameter/i, "This query form only supports one inserted value."],
+  [/simple variable parameters|not a recognized String variable/i, "The inserted value is an expression rather than a simple String variable, so the repairer cannot bind it safely."],
+  [/query variable|query declaration|variable-query expression|two-line query/i, "The query is built in a variable the repairer cannot follow safely: it is reassigned, reused, or built across several lines."],
+  [/batch|addBatch|executeBatch/i, "Batch statements (addBatch and executeBatch) are only supported in their simplest form."],
+  [/already exists/i, "The rewrite would clash with a variable name that already exists in this code."],
+  [/unique Statement declaration/i, "The Statement variable is declared more than once, so the repairer cannot tell which one to replace."],
+  [/line endings/i, "The file uses old-style line endings (a lone carriage return) that the repairer does not support."],
+  [/outside the file|Invalid vulnerability line/i, "The finding points at a line that does not exist in the file."],
+  [/No repair strategy/i, "There is no automatic repair for this kind of vulnerability."],
+  [/Repair strategy failed/i, "The repairer hit an internal error on this code."],
+];
+const explainRefusal = reason => (REFUSALS.find(([re]) => re.test(reason || "")) || [])[1] || null;
+
+/* Diagnostic groups, so "Analysis incomplete" reads as a few causes instead of a wall of compiler output. */
+const DIAG_RULES = [
+  { re: /^package (\S+) does not exist/, title: "Missing libraries", detail: m => m[1],
+    explain: "The code imports packages that were not supplied, such as servlet or Spring jars. Calls into them cannot be checked precisely, so they are treated with caution." },
+  { re: /^cannot find symbol/, title: "Unknown classes or variables", detail: (m, msg) => { const s = /symbol:\s*(\w+)\s+(\S+)/.exec(msg); return s ? `${s[1]} ${s[2]}` : "unknown symbol"; },
+    explain: "The compiler could not resolve these names, usually because a library or another source file is missing." },
+  { re: /^Unmodeled call (\S+?);/, title: "Calls without a security model", detail: m => m[1] + "()",
+    explain: "The analyzer does not know what these methods return, so it assumes their results could carry attacker input. This leans toward extra findings rather than missed ones." },
+  { re: /^Callback body analyzed conservatively/, title: "Lambdas and callbacks", detail: () => "callback or lambda body",
+    explain: "When and how the callback runs is not resolved, so its body is checked on its own, conservatively." },
+  { re: /limit reached/i, title: "Analysis limits reached", detail: (m, msg) => msg.split(";")[0],
+    explain: "Part of the code was too large or too deeply nested to finish. Findings for that part may be missing." },
+];
+
+/* Sample picker groups. Labeled sets are scanned whole, so their individual files are not listed. */
+const GROUPS = [
+  { key: "demo", label: "Live demo" },
+  { key: "labeled", label: "Accuracy test sets (labeled)" },
+  { key: "repair", label: "Repair examples" },
+  { key: "other", label: "Other samples" },
+];
+const LABELED_SETS = {
+  "samples/sqli/": { name: "SQL injection set", hint: "Methods labeled // EXPECT_SQLI. Scan this to show SQL detection accuracy. Automatic repairs are not expected here: these cases are deliberately complex." },
+  "samples/command/": { name: "Command injection set", hint: "Methods labeled // EXPECT_COMMAND. Scan this to show command detection accuracy." },
+};
+const HINTS = {
+  "samples/demo/": "Every demo file together: SQL and command findings, automatic fixes and refusals.",
+  "samples/demo/CustomerLookup.java": "SQL injection: two automatic fixes and one refusal (user-chosen ORDER BY column).",
+  "samples/demo/FileViewer.java": "Command injection: one fix (needs -CommandProfile linux-gnu-cat) and one refusal.",
+  "samples/demo/SafeReports.java": "Clean code, including an allowlisted ORDER BY. Should report zero findings.",
+  "samples/Vulnerabledao.txt": "Five SQL injections: four fixed automatically, one refused.",
+  "samples/UpdateRepairSample.java": "One SQL injection in executeUpdate, fixed automatically.",
+  "samples/LargeUpdateRepairSample.java": "One SQL injection in executeLargeUpdate, fixed automatically.",
+  "samples/RepairedDao.java": "What code looks like after the tool's repair. Should report zero findings.",
+  "samples/SafeSqlSample.java": "Safe query code. Should report zero findings.",
+};
+
+const JAVA_KEYWORDS = new Set(("abstract assert boolean break byte case catch char class const continue default do double else enum "
+  + "extends final finally float for goto if implements import instanceof int interface long native new package private protected "
+  + "public return short static strictfp super switch synchronized this throw throws transient try void volatile while var record "
+  + "yield sealed permits true false null").split(" "));
+const TOKEN_RE = /(\/\*[\s\S]*?(?:\*\/|$))|(\/\/[^\n]*)|("""[\s\S]*?(?:"""|$))|("(?:[^"\\\n]|\\.)*"?)|('(?:[^'\\\n]|\\.)*'?)|(@[A-Za-z_$][\w$]*)|(\b(?:0[xX][\da-fA-F_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)[lLfFdD]?\b)|([A-Za-z_$][\w$]*)/g;
+
+/* ================================= state ================================= */
+const state = {
+  report: null, label: "", scannedAt: null, profile: null, busy: false, seq: 0,
+  file: null, view: "original",
+  cat: "all", table: false, caseFilter: null,
+  fileFilter: "all", cweFilter: "all", open: new Set(), diffOpen: new Set(),
+  cache: new Map(),
+};
+const targetInfo = new Map();
+
+/* ================================ helpers ================================ */
+const $ = id => document.getElementById(id);
+function el(tag, attrs, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) node.append(kid instanceof Node ? kid : String(kid));
+  return node;
+}
+const svgEl = (tag, attrs) => {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  return node;
+};
+const lines = text => text.split(/\r?\n/);
+const shortName = name => name.split("/").pop();
+const stem = path => shortName(path.replace(/\/$/, "")).replace(/\.(java|txt)$/, "");
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const rate = (v, d) => d === 0 ? "N/A" : (100 * v / d).toFixed(1) + "%";
+const metrics = t => ({ precision: rate(t.tp, t.tp + t.fp), fnr: rate(t.fn, t.tp + t.fn), fpr: rate(t.fp, t.fp + t.tn) });
+const inScan = file => !!state.report && state.report.files.some(f => f.name === file);
+
+function seg(options, current, onPick, label, fk) {
+  return el("div", { class: "seg", role: "group", "aria-label": label }, options.map(o =>
+    el("button", { type: "button", "aria-pressed": String(o.key === current), "data-fk": `${fk}:${o.key}`, onclick: () => onPick(o.key) }, o.label)));
+}
+
+/* Re-renders a section and puts keyboard focus back on the control that triggered it. */
+function keepFocus(render) {
+  const active = document.activeElement;
+  const key = active && active.getAttribute ? active.getAttribute("data-fk") : null;
+  render();
+  if (key) {
+    const target = document.querySelector(`[data-fk="${CSS.escape(key)}"]`);
+    if (target) target.focus({ preventScroll: true });
+  }
+}
+
+/* ============================== sample picker ============================ */
+function organizeTargets(targets) {
+  const groups = new Map(GROUPS.map(g => [g.key, []]));
+  const isFolder = t => t.endsWith("/");
+  const filesIn = folder => targets.filter(t => !isFolder(t) && t.startsWith(folder) && !t.slice(folder.length).includes("/"));
+  for (const folder of targets.filter(isFolder)) {
+    const files = filesIn(folder), count = plural(files.length, "file");
+    const set = LABELED_SETS[folder];
+    if (set) {
+      groups.get("labeled").push({ value: folder, label: `${set.name} (${count})`, hint: set.hint });
+      continue;
+    }
+    const demo = folder === "samples/demo/", group = groups.get(demo ? "demo" : "other");
+    group.push({ value: folder, label: demo ? `All demo files (${count})` : `All of ${stem(folder)} (${count})`,
+      hint: HINTS[folder] || `Every file in ${folder} scanned together.` });
+    for (const file of files) group.push({ value: file, label: stem(file), hint: HINTS[file] || `One file from ${folder}.` });
+  }
+  for (const file of targets.filter(t => !isFolder(t) && t.split("/").length === 2)) {
+    groups.get("repair").push({ value: file, label: stem(file), hint: HINTS[file] || "Single-file example." });
+  }
+  const setOrder = Object.keys(LABELED_SETS);
+  groups.get("labeled").sort((a, b) => setOrder.indexOf(a.value) - setOrder.indexOf(b.value));
+  return GROUPS.map(g => ({ ...g, items: groups.get(g.key) })).filter(g => g.items.length);
+}
+
+function setHint(text) { $("target-hint").textContent = text; }
+function describeTarget() {
+  const info = targetInfo.get($("target").value);
+  setHint(info ? info.hint : "");
+}
+
+function showProfile(profile) {
+  state.profile = profile;
+  const badge = $("profile-badge");
+  badge.className = "pill " + (profile ? "on" : "off");
+  badge.title = profile ? `Command-injection repair assumes the target runs ${profile}.`
+    : "Start the UI with .\\scripts\\ui.ps1 -CommandProfile linux-gnu-cat to enable command-injection repair.";
+  badge.replaceChildren(el("span", { class: "pill-icon", "aria-hidden": "true" }, profile ? "✓" : "–"),
+    profile ? `Command repair: on (${profile})` : "Command repair: off");
+}
+
+async function loadTargets() {
+  const select = $("target");
+  try {
+    const body = await (await fetch("/api/targets")).json();
+    showProfile(body.commandProfile);
+    for (const group of organizeTargets(body.targets)) {
+      select.append(el("optgroup", { label: group.label }, group.items.map(item => {
+        targetInfo.set(item.value, item);
+        return el("option", { value: item.value, title: item.value }, item.label);
+      })));
+    }
+    const preferred = ["samples/demo/", "samples/Vulnerabledao.txt"].find(t => targetInfo.has(t)) || targetInfo.keys().next().value;
+    if (preferred) { select.value = preferred; describeTarget(); scanTarget(preferred); }
+  } catch (e) { showError("Could not reach the scanner server. Is UiServer running?"); }
+}
+
+/* ================================= theme ================================= */
+const THEMES = ["auto", "light", "dark"], THEME_NAMES = { auto: "Auto", light: "Light", dark: "Dark" };
+function currentTheme() { return document.documentElement.dataset.theme || "auto"; }
+function applyTheme(theme) {
+  if (theme === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  try { if (theme === "auto") localStorage.removeItem("scanner-theme"); else localStorage.setItem("scanner-theme", theme); } catch (e) { /* storage unavailable */ }
+  const button = $("theme");
+  button.textContent = `Theme: ${THEME_NAMES[theme]}`;
+  button.setAttribute("aria-label", `Color theme: ${THEME_NAMES[theme].toLowerCase()}. Select to change.`);
+}
+
+/* ============================ scanning & busy ============================ */
+let busyTimer = null;
+function setBusy(on, label) {
+  state.busy = on;
+  for (const id of ["scan", "target", "files", "folder"]) $(id).disabled = on;
+  document.querySelectorAll(".upload").forEach(l => l.classList.toggle("disabled", on));
+  $("content").classList.toggle("stale", on);
+  $("content").setAttribute("aria-busy", String(on));
+  clearInterval(busyTimer);
+  $("status").hidden = !on;
+  if (!on) return;
+  $("status-text").textContent = `Scanning ${label}…`;
+  const started = Date.now();
+  const tick = () => {
+    const s = Math.floor((Date.now() - started) / 1000);
+    $("status-time").textContent = s < 1 ? "" : s < 4 ? `${s}s` : `${s}s. Large folders, and the first scan of unlabeled code (which also scores the sample set), take longer.`;
+  };
+  tick();
+  busyTimer = setInterval(tick, 1000);
+}
+
+async function run(label, request) {
+  if (state.busy) return;
+  const seq = ++state.seq;
+  $("notices").replaceChildren();
+  setBusy(true, label);
+  try {
+    const response = await request();
+    let body;
+    try { body = await response.json(); } catch (e) { throw new Error(`the server returned ${response.status}`); }
+    if (!response.ok) throw new Error(body.error || response.statusText);
+    if (seq === state.seq) showReport(body, label);
+  } catch (e) {
+    showError("Scan failed: " + e.message);
+  } finally {
+    if (seq === state.seq) setBusy(false);
+  }
+}
+
+function scanTarget(target) {
+  const info = targetInfo.get(target);
+  run(info ? info.label : target, () => fetch("/api/scan?target=" + encodeURIComponent(target)));
+}
+
+/* entries: [{ path, file }] from the file picker, the folder picker, or drag and drop */
+function uploadEntries(entries) {
+  if (state.busy) return;
+  const skippedDir = path => path.split("/").slice(0, -1).some(part => EXCLUDED_DIRS.has(part));
+  const usable = entries.filter(e => SUPPORTED.test(e.path) && !skippedDir(e.path));
+  if (!usable.some(e => /\.java$/i.test(e.path))) { showError("No .java files found in what was uploaded."); return; }
+  const bytes = usable.reduce((sum, e) => sum + e.file.size, 0);
+  if (bytes > MAX_UPLOAD_BYTES) {
+    showError(`The upload has ${(bytes / 1048576).toFixed(1)} MB of source files; the limit is ${MAX_UPLOAD_BYTES / 1048576} MB. Try a smaller folder.`);
+    return;
+  }
+  const tops = new Set(usable.map(e => e.path.includes("/") ? e.path.split("/")[0] : null));
+  const label = tops.size === 1 && !tops.has(null) ? `folder "${[...tops][0]}" (${plural(usable.length, "file")})`
+    : usable.length === 1 ? usable[0].path : plural(usable.length, "uploaded file");
+  const ignored = entries.length - usable.length;
+  setHint(`Showing ${label}` + (ignored ? `. ${plural(ignored, "other file")} ignored (only .java, .properties, .sh and .bat are scanned).` : "."));
+  run(label, async () => {
+    const parts = [];
+    for (const { path, file } of usable) {
+      const data = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode.apply(null, data.subarray(i, i + 0x8000));
+      parts.push(encodeURIComponent(path) + "\t" + btoa(binary));
+    }
+    return fetch("/api/scan", { method: "POST", body: parts.join("\n") });
+  });
+}
+
+async function collectDropped(dataTransfer) {
+  const roots = [...dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!roots.length) return [...dataTransfer.files].map(f => ({ path: f.name, file: f }));
+  const out = [];
+  const walk = async (entry, prefix) => {
+    if (entry.isFile) {
+      out.push({ path: prefix + entry.name, file: await new Promise((resolve, reject) => entry.file(resolve, reject)) });
+      return;
+    }
+    if (EXCLUDED_DIRS.has(entry.name)) return;
+    const reader = entry.createReader();
+    for (;;) {
+      const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+      if (!batch.length) break;
+      for (const child of batch) await walk(child, prefix + entry.name + "/");
+    }
+  };
+  for (const root of roots) await walk(root, "");
+  return out;
+}
+
+function showError(message) {
+  $("notices").replaceChildren(el("div", { class: "notice error", role: "alert" }, message));
+}
+
+/* ================================ report ================================= */
+function showReport(body, label) {
+  body.findings.forEach((f, i) => { f.id = i; });
+  Object.assign(state, {
+    report: body, label, scannedAt: new Date(), view: "original", caseFilter: null, fileFilter: "all", cweFilter: "all",
+    open: new Set(body.findings.length <= 6 ? body.findings.map(f => f.id) : []), diffOpen: new Set(), cache: new Map(),
+  });
+  state.file = (body.findings[0] && body.findings[0].file) || body.files[0].name;
+  if (!body.scores.categories.some(c => c.key === state.cat)) state.cat = "all";
+  showProfile(body.commandProfile);
+  renderReport();
+}
+
+function renderReport() {
+  const r = state.report;
+  const fixed = r.findings.filter(f => f.status === "fixed").length;
+  renderDiagnostics();
+  const time = state.scannedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  $("content").replaceChildren(
+    el("div", { class: "resultbar" },
+      el("div", {}, "Results for ", el("b", {}, state.label), ` · scanned at ${time}`),
+      el("div", { class: "actions" },
+        el("button", { type: "button", onclick: () => download(`scan-report-${stamp()}.html`, htmlReport(), "text/html") }, "Export HTML report"),
+        el("button", { type: "button", onclick: () => download(`scan-report-${stamp()}.json`, jsonReport(), "application/json") }, "Export JSON"))),
+    el("div", { class: "tiles" },
+      tile("Files scanned", r.files.length),
+      tile("Vulnerabilities found", r.findings.length),
+      tile("Fixed automatically", fixed, "fixed"),
+      tile("Need manual fix", r.findings.length - fixed, "manual")),
+    el("div", { class: "layout" },
+      el("section", { class: "card", id: "code-card", "aria-label": "Scanned code" }),
+      el("div", { class: "side" },
+        el("section", { class: "card", id: "accuracy-card", "aria-label": "Detection accuracy" }),
+        el("section", { class: "card", id: "findings-card", "aria-label": "Findings" }))));
+  renderCode();
+  renderAccuracy();
+  renderFindings();
+}
+
+function tile(label, value, status) {
+  return el("div", { class: "card tile" },
+    el("div", { class: "label" }, status ? el("span", { class: "status " + status, "aria-hidden": "true" }, STATUS[status].icon) : null, label),
+    el("div", { class: "value" }, value));
+}
+
+/* ------------------------------ diagnostics ------------------------------ */
+function groupDiagnostics(diagnostics) {
+  const groups = new Map();
+  for (const d of diagnostics) {
+    const msg = d.message.trim(), rule = DIAG_RULES.find(r => r.re.test(msg));
+    const title = rule ? rule.title : "Other compiler or analysis messages";
+    const detail = rule ? rule.detail(rule.re.exec(msg), msg) : msg.split("\n")[0];
+    if (!groups.has(title)) groups.set(title, { title, count: 0, details: new Map(),
+      explain: rule ? rule.explain : "Messages that do not fit the groups above." });
+    const group = groups.get(title);
+    group.count++;
+    if (!group.details.has(detail)) group.details.set(detail, []);
+    group.details.get(detail).push(d);
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count);
+}
+
+function renderDiagnostics() {
+  const r = state.report, notices = $("notices");
+  notices.replaceChildren();
+  if (r.complete) return;
+  const groups = groupDiagnostics(r.diagnostics);
+  notices.append(el("details", { class: "notice warn" },
+    el("summary", {}, `Analysis incomplete: ${plural(r.diagnostics.length, "diagnostic")} in ${plural(groups.length, "group")}. Zero findings would not mean the code is clean.`),
+    el("div", { class: "dgroups" }, groups.map(g => el("div", { class: "dgroup" },
+      el("b", {}, `${g.title} (${g.count})`),
+      el("p", {}, g.explain),
+      el("ul", {}, [...g.details.entries()].slice(0, 8).map(([detail, items]) => el("li", {},
+        el("code", {}, detail), items.length > 1 ? ` ×${items.length}` : "", " ",
+        items.slice(0, 3).map(d => d.file && d.line > 0 && inScan(d.file)
+          ? [el("button", { type: "button", class: "loc", onclick: () => jumpTo(d.file, d.line) }, `${shortName(d.file)}:${d.line}`), " "]
+          : d.file ? el("span", { class: "muted" }, `${shortName(d.file)}${d.line > 0 ? ":" + d.line : ""} `) : null),
+        items.length > 3 ? el("span", { class: "muted" }, "…") : null)),
+        g.details.size > 8 ? el("li", { class: "muted" }, `and ${g.details.size - 8} more`) : null))))));
+}
+
+/* ------------------------------ code viewer ------------------------------ */
+function highlightLines(text) {
+  const out = [[]];
+  const push = (cls, s) => s.split("\n").forEach((part, k) => {
+    if (k) out.push([]);
+    if (part) out[out.length - 1].push([cls, part]);
+  });
+  let last = 0;
+  for (const m of text.matchAll(TOKEN_RE)) {
+    if (m.index > last) push(null, text.slice(last, m.index));
+    const cls = m[1] || m[2] ? "c" : m[3] || m[4] || m[5] ? "s" : m[6] ? "a" : m[7] ? "n" : JAVA_KEYWORDS.has(m[8]) ? "k" : null;
+    push(cls, m[0]);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) push(null, text.slice(last));
+  return out;
+}
+const token = ([cls, text]) => cls ? el("span", { class: "t-" + cls }, text) : text;
+
+function cached(key, compute) {
+  if (!state.cache.has(key)) state.cache.set(key, compute());
+  return state.cache.get(key);
+}
+
+/* Applies every repair proposal for a file at once. A proposal whose changes overlap an earlier one is left out. */
+function mergedRepair(file) {
+  return cached("merged:" + file.name, () => {
+    const original = lines(file.source), accepted = [];
+    let skipped = 0, applied = 0;
+    const overlaps = (a, b) => a.start <= b.end && b.start <= a.end;
+    for (const f of state.report.findings.filter(x => x.file === file.name && x.status === "fixed")) {
+      const hunks = [];
+      let i = 0, current = null;
+      for (const [kind, text] of diff(original, lines(f.patched))) {
+        if (kind === " ") { if (current) { hunks.push(current); current = null; } i++; continue; }
+        if (!current) current = { start: i, end: i, add: [] };
+        if (kind === "-") { i++; current.end = i; } else current.add.push(text);
+      }
+      if (current) hunks.push(current);
+      if (hunks.some(h => accepted.some(a => overlaps(a, h)))) { skipped++; continue; }
+      accepted.push(...hunks);
+      applied++;
+    }
+    accepted.sort((a, b) => a.start - b.start);
+    const out = [], added = new Set();
+    let pos = 0;
+    for (const h of accepted) {
+      out.push(...original.slice(pos, h.start));
+      for (const text of h.add) { added.add(out.length); out.push(text); }
+      pos = h.end;
+    }
+    out.push(...original.slice(pos));
+    return { lines: out, added, applied, skipped };
+  });
+}
+
+function renderCode() {
+  const card = $("code-card"), r = state.report;
+  const file = r.files.find(f => f.name === state.file) || r.files[0];
+  state.file = file.name;
+  const here = r.findings.filter(f => f.file === file.name);
+  const fixedHere = here.filter(f => f.status === "fixed");
+  if (!fixedHere.length) state.view = "original";
+
+  const head = el("div", { class: "card-head" }, el("h2", {}, "Scanned code"),
+    fixedHere.length ? seg([{ key: "original", label: "Original" }, { key: "fixed", label: `With fixes (${fixedHere.length})` }],
+      state.view, v => keepFocus(() => { state.view = v; renderCode(); }), "Code view", "view") : null);
+
+  const code = el("div", { class: "code", id: "code", tabindex: "0", "aria-label": file.name });
+  let sub, note = file.name;
+  if (state.view === "fixed") {
+    const merged = mergedRepair(file);
+    sub = "Green lines are added by the repair proposals. Review before using: files on disk are never changed.";
+    note += ` · ${plural(merged.applied, "proposal")} applied` + (merged.skipped ? `, ${merged.skipped} left out because ${merged.skipped === 1 ? "it overlaps" : "they overlap"} another` : "");
+    cached("hl-fixed:" + file.name, () => highlightLines(merged.lines.join("\n"))).forEach((tokens, i) => {
+      const added = merged.added.has(i);
+      code.append(el("div", { class: "row" + (added ? " added" : ""), id: "L" + (i + 1) },
+        el("span", { class: "mk", title: added ? "Added by a repair proposal" : null }, added ? "+" : ""),
+        el("span", { class: "ln" }, i + 1),
+        el("span", { class: "tx" }, tokens.length ? tokens.map(token) : " ")));
+    });
+  } else {
+    sub = "Highlighted lines have findings: green were fixed automatically, red need a manual fix.";
+    const byLine = new Map();
+    for (const f of here) byLine.set(f.line, [...(byLine.get(f.line) || []), f]);
+    cached("hl:" + file.name, () => highlightLines(lines(file.source).join("\n"))).forEach((tokens, i) => {
+      const n = i + 1, fs = byLine.get(n) || [];
+      const status = fs.length ? (fs.some(f => f.status === "manual") ? "manual" : "fixed") : null;
+      code.append(el("div", { class: "row" + (status ? " " + status : ""), id: "L" + n },
+        el("span", { class: "mk", title: fs.map(f => `${f.cwe} · ${STATUS[f.status].label}: ${f.message}`).join("\n") || null }, status ? STATUS[status].icon : ""),
+        el("span", { class: "ln" }, n),
+        el("span", { class: "tx" }, tokens.length ? tokens.map(token) : " ")));
+      for (const f of fs) code.append(el("div", { class: "anno " + f.status },
+        el("b", {}, `${f.cwe} · ${STATUS[f.status].label}. `), f.message));
+    });
+  }
+
+  const tabs = r.files.length > 1 ? el("div", { class: "tabs", role: "group", "aria-label": "Files" }, r.files.map(f => {
+    const count = r.findings.filter(x => x.file === f.name).length;
+    return el("button", { type: "button", class: "tab", title: f.name, "aria-pressed": String(f.name === file.name), "data-fk": "tab:" + f.name,
+      onclick: () => keepFocus(() => { state.file = f.name; state.view = "original"; renderCode(); }) },
+      shortName(f.name), count ? el("span", { class: "count" }, `(${count})`) : null);
+  })) : null;
+
+  card.replaceChildren(...[head, el("p", { class: "sub" }, sub), tabs, el("div", { class: "note", style: "margin:0 0 6px" }, note), code].filter(Boolean));
+}
+
+function jumpTo(file, line, endLine) {
+  if (!inScan(file)) return;
+  if (state.file !== file || state.view !== "original") {
+    state.file = file;
+    state.view = "original";
+    renderCode();
+  }
+  const code = $("code"), row = $("L" + line);
+  if (!row) return;
+  code.scrollTop = Math.max(0, row.offsetTop - code.clientHeight / 3);
+  $("code-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const rows = [];
+  for (let n = line; n <= Math.min(endLine || line, line + 300); n++) { const r = $("L" + n); if (r) rows.push(r); }
+  rows.forEach(r => r.classList.add("flash"));
+  setTimeout(() => rows.forEach(r => r.classList.remove("flash")), 1800);
+}
+
+/* -------------------------------- findings ------------------------------- */
+function renderFindings() {
+  const r = state.report, card = $("findings-card");
+  const parts = [el("h2", {}, `Findings (${r.findings.length})`)];
+  if (!r.findings.length) {
+    parts.push(el("p", { class: "sub" }, r.complete ? "No vulnerabilities found."
+      : "No vulnerabilities found, but the analysis was incomplete (see the warning above), so this does not prove the code is clean."));
+    card.replaceChildren(...parts);
+    return;
+  }
+  const visible = r.findings.filter(f => (state.fileFilter === "all" || f.file === state.fileFilter)
+    && (state.cweFilter === "all" || f.cwe === state.cweFilter));
+  const files = [...new Set(r.findings.map(f => f.file))], cwes = [...new Set(r.findings.map(f => f.cwe))].sort();
+  const count = pred => r.findings.filter(pred).length;
+  parts.push(el("div", { class: "filters" },
+    files.length > 1 ? el("label", { class: "filter" }, "File",
+      el("select", { "data-fk": "file-filter", onchange: e => keepFocus(() => { state.fileFilter = e.target.value; renderFindings(); }) },
+        el("option", { value: "all" }, `All files (${r.findings.length})`),
+        files.map(f => el("option", { value: f, selected: state.fileFilter === f }, `${shortName(f)} (${count(x => x.file === f)})`)))) : null,
+    cwes.length > 1 ? seg([{ key: "all", label: "All" }, ...cwes.map(c => ({ key: c, label: `${c} (${count(x => x.cwe === c)})` }))],
+      state.cweFilter, k => keepFocus(() => { state.cweFilter = k; renderFindings(); }), "Vulnerability type", "cwe") : null,
+    el("span", { class: "spacer" }),
+    el("button", { type: "button", class: "linkish", onclick: () => { visible.forEach(f => state.open.add(f.id)); renderFindings(); } }, "Expand all"),
+    el("button", { type: "button", class: "linkish", onclick: () => { visible.forEach(f => state.open.delete(f.id)); renderFindings(); } }, "Collapse all")));
+  if (visible.length < r.findings.length) parts.push(el("p", { class: "note", style: "margin-top:4px" }, `Showing ${visible.length} of ${r.findings.length} findings.`));
+  parts.push(
+    findingGroup("fixed", "Repair proposals generated by the tool. Review each change before applying it; scanned files are never modified.",
+      visible.filter(f => f.status === "fixed"), "No findings could be repaired automatically."),
+    findingGroup("manual", "The tool refused to repair these safely. A developer has to fix them.",
+      visible.filter(f => f.status === "manual"), "Nothing needs a manual fix."));
+  card.replaceChildren(...parts);
+}
+
+function findingGroup(kind, description, findings, emptyText) {
+  return el("section", { class: "group" },
+    el("h3", {}, el("span", { class: "status " + kind, "aria-hidden": "true" }, STATUS[kind].icon), `${STATUS[kind].label} (${findings.length})`),
+    el("p", { class: "sub", style: "margin-bottom:8px" }, description),
+    findings.length ? el("div", { class: "list" }, findings.map(findingCard)) : el("p", { class: "note", style: "margin:0" }, emptyText));
+}
+
+function findingCard(f) {
+  const s = STATUS[f.status];
+  const body = [el("p", { class: "msg" }, f.message), el("div", { class: "snip" }, f.snippet)];
+  if (f.status === "fixed") {
+    const original = state.report.files.find(x => x.name === f.file);
+    body.push(el("p", { class: "why" }, el("b", {}, "Fix: "), f.rationale));
+    if (original) {
+      const copy = el("button", { type: "button", onclick: () => copyText(addedLines(f).join("\n"), copy) }, "Copy fixed code");
+      body.push(el("div", { class: "row-actions" }, copy));
+      const change = el("details", { class: "change", open: state.diffOpen.has(f.id) },
+        el("summary", {}, "Show proposed change"), diffView(lines(original.source), lines(f.patched)));
+      change.addEventListener("toggle", () => change.open ? state.diffOpen.add(f.id) : state.diffOpen.delete(f.id));
+      body.push(change);
+    }
+  } else {
+    const plain = explainRefusal(f.reason);
+    body.push(el("p", { class: "why" }, el("b", {}, "Why not automatic: "), plain || f.reason));
+    if (plain) body.push(el("p", { class: "raw" }, "Repairer's message: ", el("code", {}, f.reason)));
+    body.push(el("p", { class: "why" }, el("b", {}, "How to fix: "), f.guidance));
+  }
+  const card = el("details", { class: "finding", open: state.open.has(f.id) },
+    el("summary", {},
+      el("span", { class: "status " + f.status, title: s.label }, el("span", { "aria-hidden": "true" }, s.icon), el("span", { class: "sr" }, s.label)),
+      el("span", { class: "badge" }, f.cwe),
+      el("button", { type: "button", class: "loc", title: "Show in code",
+        onclick: e => { e.preventDefault(); e.stopPropagation(); jumpTo(f.file, f.line); } }, `${shortName(f.file)}:${f.line}`),
+      el("span", { class: "summary-msg" }, f.snippet.trim())),
+    body);
+  card.addEventListener("toggle", () => card.open ? state.open.add(f.id) : state.open.delete(f.id));
+  return card;
+}
+
+function addedLines(f) {
+  const original = state.report.files.find(x => x.name === f.file);
+  return diff(lines(original.source), lines(f.patched)).filter(op => op[0] === "+").map(op => op[1]);
+}
+
+async function copyText(text, button) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+    const area = el("textarea", { style: "position:fixed;opacity:0" }, text);
+    document.body.append(area);
+    area.select();
+    try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+    area.remove();
+  }
+  const label = button.textContent;
+  button.textContent = ok ? "Copied ✓" : "Copy failed";
+  setTimeout(() => { button.textContent = label; }, 1500);
+}
+
+/* Line diff: trim the common prefix/suffix, then LCS on the changed middle. Ops are [kind, text, oldLine, newLine]. */
+function diff(a, b) {
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let e = 0;
+  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  const A = a.slice(s, a.length - e), B = b.slice(s, b.length - e), n = A.length, m = B.length;
+  const ops = [];
+  for (let i = 0; i < s; i++) ops.push([" ", a[i], i + 1, i + 1]);
+  if (n * m > 4e6) {
+    A.forEach((t, i) => ops.push(["-", t, s + i + 1, null]));
+    B.forEach((t, j) => ops.push(["+", t, null, s + j + 1]));
+  } else {
+    const dp = new Uint32Array((n + 1) * (m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+      dp[i * (m + 1) + j] = A[i] === B[j] ? dp[(i + 1) * (m + 1) + j + 1] + 1 : Math.max(dp[(i + 1) * (m + 1) + j], dp[i * (m + 1) + j + 1]);
+    let i = 0, j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && A[i] === B[j]) { ops.push([" ", A[i], s + i + 1, s + j + 1]); i++; j++; }
+      else if (i < n && (j === m || dp[(i + 1) * (m + 1) + j] >= dp[i * (m + 1) + j + 1])) { ops.push(["-", A[i], s + i + 1, null]); i++; }
+      else { ops.push(["+", B[j], null, s + j + 1]); j++; }
+    }
+  }
+  for (let k = 0; k < e; k++) ops.push([" ", a[a.length - e + k], a.length - e + k + 1, b.length - e + k + 1]);
+  return ops;
+}
+
+/* Changed lines with two lines of context; null marks skipped unchanged lines. */
+function diffHunks(a, b) {
+  const ops = diff(a, b), keep = new Array(ops.length).fill(false), out = [];
+  ops.forEach((op, i) => { if (op[0] !== " ") for (let k = Math.max(0, i - 2); k <= Math.min(ops.length - 1, i + 2); k++) keep[k] = true; });
+  let skipped = false;
+  ops.forEach((op, i) => {
+    if (!keep[i]) { skipped = true; return; }
+    if (skipped) { out.push(null); skipped = false; }
+    out.push({ kind: op[0], text: op[1], line: op[0] === "+" ? op[3] : op[2] });
+  });
+  return out;
+}
+
+function diffView(a, b) {
+  const hunks = diffHunks(a, b), view = el("div", { class: "diff" });
+  for (const h of hunks) {
+    if (!h) { view.append(el("div", { class: "gap" }, "  ⋯")); continue; }
+    view.append(el("div", { class: h.kind === "+" ? "add" : h.kind === "-" ? "del" : "" }, `${String(h.line).padStart(4)} ${h.kind} ${h.text}`));
+  }
+  if (!hunks.length) view.append(el("div", { class: "gap" }, "No textual change"));
+  return view;
+}
+
+/* -------------------------------- accuracy ------------------------------- */
+function renderAccuracy() {
+  const card = $("accuracy-card"), scores = state.report.scores;
+  const parts = [el("h2", {}, "Detection accuracy")];
+  if (!scores.categories.length) {
+    parts.push(el("p", { class: "note" }, "No labeled data available. Add // EXPECT_SQLI or // EXPECT_COMMAND comments to vulnerable methods to measure accuracy."));
+    card.replaceChildren(...parts);
+    return;
+  }
+  parts.push(el("p", { class: "sub" }, scores.source === "scan"
+    ? "Method-level results from the // EXPECT_SQLI and // EXPECT_COMMAND labels in the scanned code."
+    : "The scanned code has no // EXPECT_* labels, so this shows the labeled development sets (samples/sqli and samples/command)."));
+  if (scores.categories.length > 1) {
+    const options = [{ key: "all", label: "All" }, ...scores.categories.map(c => ({ key: c.key, label: c.key === "sql" ? "SQL" : "Command" }))];
+    parts.push(seg(options, state.cat, k => keepFocus(() => { state.cat = k; renderAccuracy(); }), "Detector", "cat"));
+  }
+  const cats = state.cat === "all" ? scores.categories.map(c => c.key) : [state.cat];
+  const total = { tp: 0, fp: 0, tn: 0, fn: 0 };
+  for (const c of scores.categories.filter(c => cats.includes(c.key))) for (const k in total) total[k] += c[k];
+
+  parts.push(state.table ? matrixTable(total) : barChart(total));
+  parts.push(el("div", { class: "legend" },
+    el("span", {}, el("i", { class: "sw", style: "background:var(--correct)" }), "Correct (TP, TN)"),
+    el("span", {}, el("i", { class: "sw", style: "background:var(--error)" }), "Errors (FN, FP)")));
+  const m = metrics(total);
+  parts.push(el("div", { class: "metrics" },
+    metric("Precision", m.precision, "TP / (TP + FP)"),
+    metric("Miss rate (FNR)", m.fnr, "FN / (TP + FN)"),
+    metric("False alarm (FPR)", m.fpr, "FP / (FP + TN)")));
+  if (state.caseFilter) parts.push(caseList(cats));
+  else parts.push(el("p", { class: "note" }, `Select a ${state.table ? "cell" : "bar"} to list the methods behind it.`));
+  parts.push(el("button", { type: "button", class: "linkish", style: "margin-top:10px", "data-fk": "table-toggle",
+    onclick: () => keepFocus(() => { state.table = !state.table; renderAccuracy(); }) }, state.table ? "Show as chart" : "Show as table"));
+  parts.push(el("p", { class: "note" }, "Each labeled method is one case. These are regression checks on labeled samples, not real-world accuracy."));
+  card.replaceChildren(...parts);
+}
+
+function pickCase(key) {
+  keepFocus(() => { state.caseFilter = state.caseFilter === key ? null : key; renderAccuracy(); });
+}
+
+function caseList(cats) {
+  const bar = BARS.find(b => b.key === state.caseFilter);
+  const cases = state.report.scores.cases.filter(c => cats.includes(c.category) && c.outcome === state.caseFilter);
+  const external = cases.some(c => !inScan(c.file));
+  return el("div", { class: "cases" },
+    el("div", { class: "cases-head" }, el("b", {}, `${bar.name} (${cases.length})`), el("span", { class: "muted" }, bar.help),
+      el("button", { type: "button", class: "linkish", onclick: () => pickCase(state.caseFilter) }, "Close")),
+    cases.length ? el("ul", {}, cases.slice(0, 300).map(c => el("li", {},
+      inScan(c.file) ? el("button", { type: "button", class: "loc", onclick: () => jumpTo(c.file, c.firstLine, c.lastLine) }, c.method)
+        : el("span", {}, c.method),
+      el("span", { class: "muted" }, ` ${shortName(c.file)}:${c.firstLine}–${c.lastLine}`),
+      cats.length > 1 ? el("span", { class: "muted" }, c.category === "sql" ? " · SQL" : " · Command") : null)))
+      : el("p", { class: "note", style: "margin-top:4px" }, "None."),
+    external ? el("p", { class: "note" }, "These methods are in the labeled sample set, not in the scanned code. Scan that set to open them.") : null);
+}
+
+function metric(k, v, formula) {
+  return el("div", { title: formula }, el("div", { class: "k" }, k), el("div", { class: "v" }, v));
+}
+
+function matrixTable(t) {
+  const cell = key => el("td", {}, el("button", { type: "button", "aria-pressed": String(state.caseFilter === key), "data-fk": "cell:" + key,
+    onclick: () => pickCase(key) }, `${key.toUpperCase()} ${t[key]}`));
+  return el("table", { class: "cm" },
+    el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", { scope: "col" }, "Flagged"), el("th", { scope: "col" }, "Not flagged"))),
+    el("tbody", {},
+      el("tr", {}, el("th", { scope: "row" }, "Labeled vulnerable"), cell("tp"), cell("fn")),
+      el("tr", {}, el("th", { scope: "row" }, "Labeled safe"), cell("fp"), cell("tn"))));
+}
+
+/* Axis top = 4 whole-number steps of 1, 2 or 5 x 10^k, so every tick is a clean integer. */
+function niceMax(v) {
+  const raw = Math.max(1, v / 4), mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const f of [1, 2, 5, 10]) if (f * mag >= raw) return 4 * f * mag;
+}
+
+function barChart(t) {
+  const W = 340, H = 190, L = 30, R = 8, T = 18, B = 26, plotH = H - T - B, band = (W - L - R) / BARS.length, bw = 24;
+  const max = niceMax(Math.max(t.tp, t.fp, t.tn, t.fn));
+  const y = v => T + plotH - (v / max) * plotH;
+  const wrap = el("div", { class: "chart" });
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "group",
+    "aria-label": `Confusion matrix: TP ${t.tp}, FN ${t.fn}, FP ${t.fp}, TN ${t.tn}. Select a bar to list its methods.` });
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i, yy = y(v);
+    svg.append(svgEl("line", { x1: L, x2: W - R, y1: yy, y2: yy, stroke: i === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }));
+    const label = svgEl("text", { x: L - 6, y: yy + 3.5, "text-anchor": "end" });
+    label.textContent = v;
+    svg.append(label);
+  }
+  const tip = el("div", { class: "tip", hidden: true });
+  BARS.forEach((bar, i) => {
+    const value = t[bar.key], cx = L + band * i + band / 2, top = y(value), h = T + plotH - top;
+    const selected = state.caseFilter === bar.key, dim = state.caseFilter && !selected;
+    const r = Math.min(4, h / 2), x0 = cx - bw / 2, base = T + plotH;
+    const path = h > 0
+      ? `M${x0},${base} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x0 + bw - r} Q${x0 + bw},${top} ${x0 + bw},${top + r} V${base} Z`
+      : `M${x0},${base} H${x0 + bw}`;
+    const mark = svgEl("path", { class: "bar" + (dim ? " dim" : ""), d: path, fill: `var(--${bar.kind})`, stroke: h > 0 ? "none" : `var(--${bar.kind})`, "stroke-width": 2 });
+    const val = svgEl("text", { class: "val", x: cx, y: top - 5, "text-anchor": "middle" });
+    val.textContent = value;
+    const cat = svgEl("text", { class: "cat", x: cx, y: H - 8, "text-anchor": "middle" });
+    cat.textContent = bar.label;
+    const hit = svgEl("rect", { class: "hit", x: cx - band / 2, y: T, width: band, height: plotH + B, tabindex: 0, role: "button",
+      "aria-pressed": String(selected), "data-fk": "bar:" + bar.key, "aria-label": `${bar.name}: ${value}. ${bar.help}. Select to list these methods.` });
+    const show = () => {
+      tip.replaceChildren(el("b", {}, `${bar.name}: ${value}`), el("br"), bar.help);
+      const scale = svg.getBoundingClientRect().width / W;
+      tip.style.left = cx * scale + "px";
+      tip.style.top = (top - 10) * scale + "px";
+      tip.hidden = false;
+    };
+    const hide = () => { tip.hidden = true; };
+    hit.addEventListener("mouseenter", show);
+    hit.addEventListener("mouseleave", hide);
+    hit.addEventListener("focus", show);
+    hit.addEventListener("blur", hide);
+    hit.addEventListener("click", () => pickCase(bar.key));
+    hit.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickCase(bar.key); } });
+    const g = svgEl("g", {});
+    g.append(mark, val, cat, hit);
+    svg.append(g);
+  });
+  wrap.append(svg, tip);
+  return wrap;
+}
+
+/* ================================ export ================================= */
+const stamp = () => { const d = state.scannedAt; const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; };
+
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = el("a", { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function changeText(f) {
+  const original = state.report.files.find(x => x.name === f.file);
+  if (!original) return "";
+  return diffHunks(lines(original.source), lines(f.patched)).map(h => h ? `${String(h.line).padStart(4)} ${h.kind} ${h.text}` : "  ...").join("\n");
+}
+
+function jsonReport() {
+  const r = state.report;
+  return JSON.stringify({
+    tool: "Security Scanner", target: state.label, scannedAt: state.scannedAt.toISOString(), commandProfile: r.commandProfile,
+    analysisComplete: r.complete,
+    summary: { files: r.files.length, findings: r.findings.length, fixed: r.findings.filter(f => f.status === "fixed").length,
+      manual: r.findings.filter(f => f.status === "manual").length },
+    files: r.files.map(f => f.name),
+    findings: r.findings.map(f => ({
+      cwe: f.cwe, file: f.file, line: f.line, message: f.message, snippet: f.snippet, status: f.status, strategy: f.strategy,
+      ...(f.status === "fixed" ? { rationale: f.rationale, change: changeText(f).split("\n") }
+        : { reason: f.reason, explanation: explainRefusal(f.reason), guidance: f.guidance }),
+    })),
+    diagnostics: r.diagnostics,
+    accuracy: { source: r.scores.source, categories: r.scores.categories.map(c => ({ ...c, ...metrics(c) })), cases: r.scores.cases },
+  }, null, 2);
+}
+
+function htmlReport() {
+  const r = state.report;
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const fixed = r.findings.filter(f => f.status === "fixed").length;
+  const accuracy = r.scores.categories.map(c => { const m = metrics(c);
+    return `<tr><td>${esc(c.label)}</td><td>${c.tp}</td><td>${c.fn}</td><td>${c.fp}</td><td>${c.tn}</td><td>${m.precision}</td><td>${m.fnr}</td><td>${m.fpr}</td></tr>`; }).join("");
+  const diagnostics = groupDiagnostics(r.diagnostics).map(g =>
+    `<li><b>${esc(g.title)}</b> (${g.count}): ${esc(g.explain)}<br><span class="muted">${[...g.details.keys()].slice(0, 15).map(esc).join(", ")}</span></li>`).join("");
+  const findings = r.findings.map((f, i) => `<section class="f ${f.status}">
+<h3>${i + 1}. ${esc(STATUS[f.status].label)} · ${esc(f.cwe)} · ${esc(f.file)}:${f.line}</h3>
+<p>${esc(f.message)}</p><pre>${esc(f.snippet)}</pre>
+${f.status === "fixed"
+    ? `<p><b>Fix:</b> ${esc(f.rationale)}</p><pre class="diff">${esc(changeText(f))}</pre>`
+    : `<p><b>Why not automatic:</b> ${esc(explainRefusal(f.reason) || f.reason)}</p><p class="muted">Repairer's message: ${esc(f.reason)}</p><p><b>How to fix:</b> ${esc(f.guidance)}</p>`}
+</section>`).join("\n");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security scan report: ${esc(state.label)}</title>
+<style>body{font:14px/1.5 system-ui,"Segoe UI",sans-serif;color:#0b0b0b;background:#fff;max-width:960px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:28px 0 8px;border-bottom:1px solid #e1e0d9;padding-bottom:4px}h3{font-size:14px;margin:0 0 4px}
+.muted{color:#6e6c66}table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #e1e0d9;padding:5px 8px;text-align:left}
+pre{font:12px/1.5 Consolas,ui-monospace,monospace;background:#f2f1ed;padding:8px;border-radius:6px;overflow-x:auto;white-space:pre}
+.f{border:1px solid #e1e0d9;border-left:4px solid;border-radius:6px;padding:10px 12px;margin:10px 0}.f.fixed{border-left-color:#0ca30c}.f.manual{border-left-color:#d03b3b}
+.warn{background:#fff6e0;border:1px solid #e8d9b0;border-radius:6px;padding:8px 12px}</style></head><body>
+<h1>Security scan report</h1>
+<p class="muted">Target: ${esc(state.label)} · Scanned ${esc(state.scannedAt.toLocaleString())} · Command repair: ${r.commandProfile ? "on (" + esc(r.commandProfile) + ")" : "off"}</p>
+${r.complete ? "" : `<p class="warn"><b>Analysis incomplete.</b> ${plural(r.diagnostics.length, "diagnostic")}; zero findings would not mean the code is clean.</p>`}
+<h2>Summary</h2>
+<table><tr><th>Files scanned</th><th>Vulnerabilities found</th><th>Fixed automatically</th><th>Need manual fix</th></tr>
+<tr><td>${r.files.length}</td><td>${r.findings.length}</td><td>${fixed}</td><td>${r.findings.length - fixed}</td></tr></table>
+<h2>Detection accuracy</h2>
+${r.scores.categories.length ? `<p class="muted">${r.scores.source === "scan" ? "From the // EXPECT_* labels in the scanned code." : "The scanned code has no labels; these are the labeled development sets."} Method-level regression checks, not real-world accuracy.</p>
+<table><tr><th>Detector</th><th>TP</th><th>FN</th><th>FP</th><th>TN</th><th>Precision</th><th>Miss rate (FNR)</th><th>False alarm (FPR)</th></tr>${accuracy}</table>` : "<p>No labeled data.</p>"}
+${diagnostics ? `<h2>Analysis diagnostics</h2><ul>${diagnostics}</ul>` : ""}
+<h2>Findings (${r.findings.length})</h2>
+${findings || "<p>No vulnerabilities found.</p>"}
+<p class="muted">Generated by the Security Scanner UI. Repair proposals were not applied to any file.</p>
+</body></html>`;
+}
+
+/* ================================ wiring ================================= */
+$("scan").addEventListener("click", () => {
+  const target = $("target").value;
+  describeTarget();
+  if (target) scanTarget(target);
+});
+$("target").addEventListener("change", describeTarget);
+$("files").addEventListener("change", e => {
+  const entries = [...e.target.files].map(f => ({ path: f.name, file: f }));
+  e.target.value = "";
+  if (entries.length) uploadEntries(entries);
+});
+$("folder").addEventListener("change", e => {
+  const entries = [...e.target.files].map(f => ({ path: f.webkitRelativePath || f.name, file: f }));
+  e.target.value = "";
+  if (entries.length) uploadEntries(entries);
+});
+$("theme").addEventListener("click", () => applyTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]));
+
+const hasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+let dragDepth = 0;
+window.addEventListener("dragenter", e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $("drop").hidden = state.busy; });
+window.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener("dragleave", e => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; $("drop").hidden = true; } });
+window.addEventListener("drop", async e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  $("drop").hidden = true;
+  if (state.busy) return;
+  try { uploadEntries(await collectDropped(e.dataTransfer)); }
+  catch (err) { showError("Could not read the dropped files: " + err.message); }
+});
+
+applyTheme(currentTheme());
+loadTargets();
+</script>
+</body>
+</html>
