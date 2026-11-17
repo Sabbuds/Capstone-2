@@ -14,6 +14,8 @@ From PowerShell in this repository:
 .\scripts\test.ps1
 # Or select an installed JDK:
 .\scripts\test.ps1 -JavaHome 'C:\Program Files\Java\jdk-21.0.12'
+To test UI:
+.\scripts\ui.ps1 -CommandProfile linux-gnu-cat
 ```
 
 The script compiles with `--release 17 -Xlint:all` and runs both detection
