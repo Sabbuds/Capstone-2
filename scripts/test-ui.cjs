@@ -86,7 +86,8 @@ async function download(page, label) {
 async function main() {
   process.chdir(root);
   await fs.mkdir(artifacts, { recursive: true });
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'capstone-ui-'));
+  // Windows runners can expose TEMP through an 8.3 alias while Java returns the full path.
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'capstone-ui-')));
   const errors = [];
   let browser, page;
   const original = await fs.readFile('samples/demo/CustomerLookup.java', 'utf8');
@@ -293,7 +294,7 @@ public class Multiple {
       await exited;
     }));
     // Only this test's newly created temporary directory is removed.
-    assert.equal(path.dirname(temporary), os.tmpdir());
+    assert.equal(path.dirname(temporary), await fs.realpath(os.tmpdir()));
     assert.ok(path.basename(temporary).startsWith('capstone-ui-'));
     await fs.rm(temporary, { recursive: true, force: true });
   }
