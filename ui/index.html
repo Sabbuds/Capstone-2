@@ -80,10 +80,17 @@ button.pill { cursor: pointer; }
 .picker { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
 .hint { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 520px; text-align: right; }
+.dependencies { width: 100%; max-width: 520px; font-size: 12.5px; }
+.dependencies summary { cursor: pointer; text-align: right; }
+.dependencies label { display: block; margin: 8px 0 4px; }
+.dependencies textarea { display: block; width: 100%; resize: vertical; font: 12px var(--mono); padding: 8px;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.dependencies .hint { margin-top: 4px; text-align: left; }
 @media (max-width: 760px) {
   .picker { align-items: flex-start; }
   .controls { justify-content: flex-start; }
   .hint { text-align: left; }
+  .dependencies summary { text-align: left; }
 }
 select, button, .upload {
   font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border);
@@ -261,6 +268,12 @@ table.cm td button[aria-pressed="true"] { background: var(--surface-2); font-wei
         <label class="upload"><input id="folder" type="file" webkitdirectory multiple>Upload folder…</label>
       </div>
       <p class="hint" id="target-hint" aria-live="polite"></p>
+      <details class="dependencies">
+        <summary>Project dependencies (optional)</summary>
+        <label for="classpath">Dependency JARs or compiled class directories, one path per line</label>
+        <textarea id="classpath" rows="3" placeholder="lib/api.jar&#10;C:\projects\my-app\target\classes" aria-describedby="classpath-hint"></textarea>
+        <p class="hint" id="classpath-hint">Paths refer to this computer. Relative paths start at the scanner repository. Add dependencies before scanning or uploading Java files.</p>
+      </details>
     </div>
   </header>
 
@@ -274,7 +287,7 @@ table.cm td button[aria-pressed="true"] { background: var(--surface-2); font-wei
 "use strict";
 /* =============================== constants =============================== */
 const STATUS = {
-  fixed: { icon: "✓", label: "Fixed automatically" },
+  fixed: { icon: "✓", label: "Repair proposed" },
   manual: { icon: "!", label: "Needs manual fix" },
 };
 const BARS = [
@@ -337,13 +350,13 @@ const LABELED_SETS = {
   "samples/command/": { name: "Command injection set", hint: "Methods labeled // EXPECT_COMMAND. Scan this to show command detection accuracy." },
 };
 const HINTS = {
-  "samples/demo/": "Every demo file together: SQL and command findings, automatic fixes and refusals.",
-  "samples/demo/CustomerLookup.java": "SQL injection: two automatic fixes and one refusal (user-chosen ORDER BY column).",
-  "samples/demo/FileViewer.java": "Command injection: one fix (needs -CommandProfile linux-gnu-cat) and one refusal.",
+  "samples/demo/": "Every demo file together: SQL and command findings, repair proposals and manual fixes.",
+  "samples/demo/CustomerLookup.java": "SQL injection: two repair proposals and one manual fix (user-chosen ORDER BY column).",
+  "samples/demo/FileViewer.java": "Command injection: one proposal (needs -CommandProfile linux-gnu-cat) and one manual fix.",
   "samples/demo/SafeReports.java": "Clean code, including an allowlisted ORDER BY. Should report zero findings.",
-  "samples/Vulnerabledao.txt": "Five SQL injections: four fixed automatically, one refused.",
-  "samples/UpdateRepairSample.java": "One SQL injection in executeUpdate, fixed automatically.",
-  "samples/LargeUpdateRepairSample.java": "One SQL injection in executeLargeUpdate, fixed automatically.",
+  "samples/Vulnerabledao.txt": "Five SQL injections: four repair proposals, one manual fix.",
+  "samples/UpdateRepairSample.java": "One SQL injection in executeUpdate with a repair proposal.",
+  "samples/LargeUpdateRepairSample.java": "One SQL injection in executeLargeUpdate with a repair proposal.",
   "samples/RepairedDao.java": "What code looks like after the tool's repair. Should report zero findings.",
   "samples/SafeSqlSample.java": "Safe query code. Should report zero findings.",
 };
@@ -479,7 +492,7 @@ function applyTheme(theme) {
 let busyTimer = null;
 function setBusy(on, label) {
   state.busy = on;
-  for (const id of ["scan", "target", "files", "folder"]) $(id).disabled = on;
+  for (const id of ["scan", "target", "files", "folder", "classpath"]) $(id).disabled = on;
   document.querySelectorAll(".upload").forEach(l => l.classList.toggle("disabled", on));
   $("content").classList.toggle("stale", on);
   $("content").setAttribute("aria-busy", String(on));
@@ -516,7 +529,15 @@ async function run(label, request) {
 
 function scanTarget(target) {
   const info = targetInfo.get(target);
-  run(info ? info.label : target, () => fetch("/api/scan?target=" + encodeURIComponent(target)));
+  run(info ? info.label : target, () => fetch(scanUrl(target)));
+}
+
+function scanUrl(target) {
+  const params = new URLSearchParams();
+  if (target) params.set("target", target);
+  const classpath = $("classpath").value.trim();
+  if (classpath) params.set("classpath", classpath);
+  return "/api/scan" + (params.size ? "?" + params : "");
 }
 
 /* entries: [{ path, file }] from the file picker, the folder picker, or drag and drop */
@@ -543,7 +564,11 @@ function uploadEntries(entries) {
       for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode.apply(null, data.subarray(i, i + 0x8000));
       parts.push(encodeURIComponent(path) + "\t" + btoa(binary));
     }
-    return fetch("/api/scan", { method: "POST", body: parts.join("\n") });
+    const body = parts.join("\n");
+    if (new TextEncoder().encode(body).length > MAX_UPLOAD_BYTES) {
+      throw new Error("The encoded upload exceeds 8 MB. Choose a smaller set of files.");
+    }
+    return fetch(scanUrl(), { method: "POST", body });
   });
 }
 
@@ -599,7 +624,7 @@ function renderReport() {
     el("div", { class: "tiles" },
       tile("Files scanned", r.files.length),
       tile("Vulnerabilities found", r.findings.length),
-      tile("Fixed automatically", fixed, "fixed"),
+      tile("Repair proposals", fixed, "fixed"),
       tile("Need manual fix", r.findings.length - fixed, "manual")),
     el("div", { class: "layout" },
       el("section", { class: "card", id: "code-card", "aria-label": "Scanned code" }),
@@ -681,12 +706,22 @@ function cached(key, compute) {
 function mergedRepair(file) {
   return cached("merged:" + file.name, () => {
     const original = lines(file.source), accepted = [];
+    const identifiers = new Set(file.source.match(/[A-Za-z_$][\w$]*/g) || []);
+    let variableNumber = 0;
     let skipped = 0, applied = 0;
     const overlaps = (a, b) => a.start <= b.end && b.start <= a.end;
     for (const f of state.report.findings.filter(x => x.file === file.name && x.status === "fixed")) {
+      let patched = f.patched;
+      // SQL proposals independently introduce __ps. Give each a free name before combining them.
+      if (!identifiers.has("__ps") && /\b__ps\b/.test(patched)) {
+        let name;
+        do { name = "__ps_" + (++variableNumber); } while (identifiers.has(name));
+        patched = patched.replace(/\b__ps\b/g, name);
+        identifiers.add(name);
+      }
       const hunks = [];
       let i = 0, current = null;
-      for (const [kind, text] of diff(original, lines(f.patched))) {
+      for (const [kind, text] of diff(original, lines(patched))) {
         if (kind === " ") { if (current) { hunks.push(current); current = null; } i++; continue; }
         if (!current) current = { start: i, end: i, add: [] };
         if (kind === "-") { i++; current.end = i; } else current.add.push(text);
@@ -717,16 +752,18 @@ function renderCode() {
   const fixedHere = here.filter(f => f.status === "fixed");
   if (!fixedHere.length) state.view = "original";
 
+  const merged = fixedHere.length ? mergedRepair(file) : null;
   const head = el("div", { class: "card-head" }, el("h2", {}, "Scanned code"),
-    fixedHere.length ? seg([{ key: "original", label: "Original" }, { key: "fixed", label: `With fixes (${fixedHere.length})` }],
-      state.view, v => keepFocus(() => { state.view = v; renderCode(); }), "Code view", "view") : null);
+    merged ? el("div", { class: "actions" },
+      seg([{ key: "original", label: "Original" }, { key: "fixed", label: `With proposals (${merged.applied})` }],
+        state.view, v => keepFocus(() => { state.view = v; renderCode(); }), "Code view", "view"),
+      el("button", { type: "button", onclick: () => downloadProposedFile(file) }, "Download proposed file")) : null);
 
   const code = el("div", { class: "code", id: "code", tabindex: "0", "aria-label": file.name });
   let sub, note = file.name;
   if (state.view === "fixed") {
-    const merged = mergedRepair(file);
     sub = "Green lines are added by the repair proposals. Review before using: files on disk are never changed.";
-    note += ` · ${plural(merged.applied, "proposal")} applied` + (merged.skipped ? `, ${merged.skipped} left out because ${merged.skipped === 1 ? "it overlaps" : "they overlap"} another` : "");
+    note += ` · ${plural(merged.applied, "proposal")} included`;
     cached("hl-fixed:" + file.name, () => highlightLines(merged.lines.join("\n"))).forEach((tokens, i) => {
       const added = merged.added.has(i);
       code.append(el("div", { class: "row" + (added ? " added" : ""), id: "L" + (i + 1) },
@@ -735,7 +772,7 @@ function renderCode() {
         el("span", { class: "tx" }, tokens.length ? tokens.map(token) : " ")));
     });
   } else {
-    sub = "Highlighted lines have findings: green were fixed automatically, red need a manual fix.";
+    sub = "Highlighted lines have findings: green have repair proposals, red need a manual fix.";
     const byLine = new Map();
     for (const f of here) byLine.set(f.line, [...(byLine.get(f.line) || []), f]);
     cached("hl:" + file.name, () => highlightLines(lines(file.source).join("\n"))).forEach((tokens, i) => {
@@ -757,7 +794,15 @@ function renderCode() {
       shortName(f.name), count ? el("span", { class: "count" }, `(${count})`) : null);
   })) : null;
 
-  card.replaceChildren(...[head, el("p", { class: "sub" }, sub), tabs, el("div", { class: "note", style: "margin:0 0 6px" }, note), code].filter(Boolean));
+  card.replaceChildren(...[head, el("p", { class: "sub" }, sub),
+    merged && merged.skipped ? el("p", { class: "notice", role: "status" }, `${plural(merged.skipped, "overlapping proposal")} left out of the preview and download. Review those findings separately.`) : null,
+    tabs, el("div", { class: "note", style: "margin:0 0 6px" }, note), code].filter(Boolean));
+}
+
+function downloadProposedFile(file) {
+  const merged = mergedRepair(file);
+  const newline = file.source.includes("\r\n") ? "\r\n" : "\n";
+  download(shortName(file.name), merged.lines.join(newline), "text/plain;charset=utf-8");
 }
 
 function jumpTo(file, line, endLine) {
@@ -804,7 +849,7 @@ function renderFindings() {
   if (visible.length < r.findings.length) parts.push(el("p", { class: "note", style: "margin-top:4px" }, `Showing ${visible.length} of ${r.findings.length} findings.`));
   parts.push(
     findingGroup("fixed", "Repair proposals generated by the tool. Review each change before applying it; scanned files are never modified.",
-      visible.filter(f => f.status === "fixed"), "No findings could be repaired automatically."),
+      visible.filter(f => f.status === "fixed"), "No automatic repair proposals are available."),
     findingGroup("manual", "The tool refused to repair these safely. A developer has to fix them.",
       visible.filter(f => f.status === "manual"), "Nothing needs a manual fix."));
   card.replaceChildren(...parts);
@@ -824,7 +869,7 @@ function findingCard(f) {
     const original = state.report.files.find(x => x.name === f.file);
     body.push(el("p", { class: "why" }, el("b", {}, "Fix: "), f.rationale));
     if (original) {
-      const copy = el("button", { type: "button", onclick: () => copyText(addedLines(f).join("\n"), copy) }, "Copy fixed code");
+      const copy = el("button", { type: "button", onclick: () => copyText(addedLines(f).join("\n"), copy) }, "Copy proposed code");
       body.push(el("div", { class: "row-actions" }, copy));
       const change = el("details", { class: "change", open: state.diffOpen.has(f.id) },
         el("summary", {}, "Show proposed change"), diffView(lines(original.source), lines(f.patched)));
@@ -1070,11 +1115,12 @@ function jsonReport() {
   return JSON.stringify({
     tool: "Security Scanner", target: state.label, scannedAt: state.scannedAt.toISOString(), commandProfile: r.commandProfile,
     analysisComplete: r.complete,
-    summary: { files: r.files.length, findings: r.findings.length, fixed: r.findings.filter(f => f.status === "fixed").length,
+    classpath: r.classpath,
+    summary: { files: r.files.length, findings: r.findings.length, repairProposals: r.findings.filter(f => f.status === "fixed").length,
       manual: r.findings.filter(f => f.status === "manual").length },
     files: r.files.map(f => f.name),
     findings: r.findings.map(f => ({
-      cwe: f.cwe, file: f.file, line: f.line, message: f.message, snippet: f.snippet, status: f.status, strategy: f.strategy,
+      cwe: f.cwe, file: f.file, line: f.line, message: f.message, snippet: f.snippet, status: f.status === "fixed" ? "proposed" : "manual", strategy: f.strategy,
       ...(f.status === "fixed" ? { rationale: f.rationale, change: changeText(f).split("\n") }
         : { reason: f.reason, explanation: explainRefusal(f.reason), guidance: f.guidance }),
     })),
@@ -1108,9 +1154,10 @@ pre{font:12px/1.5 Consolas,ui-monospace,monospace;background:#f2f1ed;padding:8px
 .warn{background:#fff6e0;border:1px solid #e8d9b0;border-radius:6px;padding:8px 12px}</style></head><body>
 <h1>Security scan report</h1>
 <p class="muted">Target: ${esc(state.label)} · Scanned ${esc(state.scannedAt.toLocaleString())} · Command repair: ${r.commandProfile ? "on (" + esc(r.commandProfile) + ")" : "off"}</p>
+${r.classpath.length ? `<p class="muted">Dependencies: ${r.classpath.map(esc).join(", ")}</p>` : ""}
 ${r.complete ? "" : `<p class="warn"><b>Analysis incomplete.</b> ${plural(r.diagnostics.length, "diagnostic")}; zero findings would not mean the code is clean.</p>`}
 <h2>Summary</h2>
-<table><tr><th>Files scanned</th><th>Vulnerabilities found</th><th>Fixed automatically</th><th>Need manual fix</th></tr>
+<table><tr><th>Files scanned</th><th>Vulnerabilities found</th><th>Repair proposals</th><th>Need manual fix</th></tr>
 <tr><td>${r.files.length}</td><td>${r.findings.length}</td><td>${fixed}</td><td>${r.findings.length - fixed}</td></tr></table>
 <h2>Detection accuracy</h2>
 ${r.scores.categories.length ? `<p class="muted">${r.scores.source === "scan" ? "From the // EXPECT_* labels in the scanned code." : "The scanned code has no labels; these are the labeled development sets."} Method-level regression checks, not real-world accuracy.</p>

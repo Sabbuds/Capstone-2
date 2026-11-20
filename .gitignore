@@ -3,3 +3,4 @@ target/
 *.class
 .DS_store
 .benchmark-cache/
+node_modules/

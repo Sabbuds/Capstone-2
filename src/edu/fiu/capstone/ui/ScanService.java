@@ -86,8 +86,12 @@ public final class ScanService {
     }
 
     public Report scan(Map<String, String> sources, Map<String, String> resources) {
+        return scan(sources, resources, List.of());
+    }
+
+    public Report scan(Map<String, String> sources, Map<String, String> resources, List<Path> classpath) {
         DetectionResult result = new SecurityAnalyzer().analyze(
-                new DetectionRequest(sources, sources.keySet(), List.of(), resources));
+                new DetectionRequest(sources, sources.keySet(), classpath, resources));
         List<Item> items = new ArrayList<>();
         for (Finding finding : result.findings()) items.add(repair(finding, sources.get(finding.file())));
         return new Report(sources, items, result.diagnostics(), label(sources, result.findings()));

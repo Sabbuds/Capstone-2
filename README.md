@@ -6,22 +6,97 @@ and data-flow analysis. Scanned code is never executed; annotation processing
 and bytecode generation are disabled. No third-party runtime dependencies are
 required.
 
-## Build and test
+## Start the UI on Windows
 
-From PowerShell in this repository:
+Install a JDK 17 or 21. From PowerShell in this repository, run:
 
 ```powershell
-.\scripts\test.ps1
-# Or select an installed JDK:
-.\scripts\test.ps1 -JavaHome 'C:\Program Files\Java\jdk-21.0.12'
-To test UI:
+.\scripts\ui.ps1
+# Or select your JDK and another port:
+.\scripts\ui.ps1 -JavaHome 'C:\Program Files\Java\jdk-21.0.12' -Port 8080
+```
+
+Open http://localhost:8080. Stop the server with Ctrl+C. The app runs locally.
+Node.js is only needed for browser tests.
+
+Select a built-in sample, upload files, upload a folder, or drag a folder onto
+the page. Supply UTF-8 Java 17 source files ending in `.java`. Include related
+classes together for cross-file analysis. Supporting `.properties`, `.sh` and
+`.bat` files are accepted with Java sources. Compiled `.class` files, dependency
+JARs and ZIP archives are not source uploads. The encoded upload limit is 8 MB.
+Build folders and unsupported files in a folder upload are skipped.
+
+Under **Project dependencies**, enter one JAR or compiled class directory per
+line. These paths refer to the computer running the scanner. Absolute paths and
+paths relative to this repository are supported, including paths with spaces.
+Dependencies apply to both sample scans and uploads. Missing paths produce a
+visible error. Available dependencies improve type resolution, while compiler
+and model diagnostics continue to indicate incomplete analysis.
+
+Review findings, open **Show proposed change**, and select **With proposals** to
+preview the combined changes for a file. **Download proposed file** saves that
+preview under the original source filename. Copy it into a separate checkout
+and run the target application's tests before accepting the changes. Overlapping
+proposals are excluded from the combined file with a visible count. Remaining
+manual findings still need developer attention. HTML and JSON reports describe
+proposals and preserve diagnostics and dependency paths.
+
+Command repair requires an explicit target profile. For applications that use
+GNU `cat` on Linux, start the UI with:
+
+```powershell
 .\scripts\ui.ps1 -CommandProfile linux-gnu-cat
 ```
 
-The script compiles with `--release 17 -Xlint:all` and runs both detection
-suites, detector-contract tests, existing SQL repair tests, CLI integration
-and evaluation tests. CI runs the same script on JDK 17 and 21. Command sample
-methods are never invoked.
+This enables proposals for the supported `sh`/`bash` `cat` patterns. Other
+command findings receive manual guidance. The profile describes the scanned
+application's intended runtime, regardless of the Windows scanner host.
+
+## Build and test everything
+
+Install Node.js 20+ with npm and Microsoft Edge in addition to the JDK. Run:
+
+```powershell
+.\scripts\test.ps1
+# Or choose the installed JDK:
+.\scripts\test.ps1 -JavaHome 'C:\Program Files\Java\jdk-21.0.12'
+```
+
+This single command compiles with `--release 17 -Xlint:all`, runs SQL and command
+detection, detector contracts, both repair suites, harmless Java child-process
+runtime checks, CLI integration, evaluation and UI service tests. It then runs
+the browser tests in headless Edge using temporary local servers. The first run
+installs the locked browser test dependency with `npm ci`. Internet access is
+needed for that installation. Test servers and temporary source fixtures are
+cleaned up afterward. Browser screenshots and report downloads stay in ignored
+`.benchmark-cache/ui-tests/`.
+
+Browser checks exercise uploads, dependency resolution, safe and vulnerable
+samples, repair previews, downloaded-source compilation and rescanning, reports,
+error recovery, themes and mobile layout. CI runs the same command on JDK 17
+and 21. To rerun only the browser checks after compiling:
+
+```powershell
+npm run test:ui
+```
+
+Set `JAVA_HOME` to your JDK for that standalone command. `BROWSER_EXECUTABLE`
+can select a different installed Chromium-based browser by absolute path.
+
+## Project layout
+
+| Location | Purpose |
+| --- | --- |
+| `ui/index.html` | Browser interface, previews and downloads |
+| `src/edu/fiu/capstone/ui/` | Local server and scan/repair service |
+| `src/edu/fiu/capstone/skeleton/` | Detectors, repair strategies, shared contracts and Java tests |
+| `samples/demo/` | Small UI demo examples with predictable findings |
+| `samples/sqli/`, `samples/command/` | Labeled detector regression samples |
+| Other files in `samples/` | SQL repair, safe and legacy input fixtures used by tests and the UI |
+| `scripts/` | Launch, full test, browser test and optional benchmark commands |
+
+Build output, downloaded benchmark sources and Node dependencies are ignored.
+The existing fixture filenames remain usable by the tests and the sample picker.
 
 ## Run detection
 
@@ -46,9 +121,8 @@ explicitly. **CLI exit status alone is not a clean-scan indicator:** incomplete
 analysis can still exit successfully. Check structured diagnostics even when
 there are no findings.
 
-Omitting `--detect-only` also displays existing repair proposals. The CLI never
-modifies scanned files. SQL repair implementation and reporting contracts remain
-the team's responsibility; no command repair is generated.
+Omitting `--detect-only` displays SQL repair proposals. The UI also integrates
+the command repair strategy when the supported target profile is supplied.
 
 ## Detector API and team handoff
 
@@ -128,7 +202,21 @@ helper calls. A limit returns a diagnostic and findings collected so far.
 Unsupported behavior must not be presented as a complete clean scan. No finite
 static analyzer guarantees zero false positives and negatives for arbitrary code.
 
-## Verification recorded 2026-11-11
+## Latest verification recorded 2026-11-19
+
+On the final UI implementation, both JDK 17 and JDK 21 passed the 342 detector
+checks, both repair suites, runtime argument checks, CLI integration, evaluation
+and UI service tests. All 19 browser checks passed on both JDKs using Edge.
+Downloaded SQL and command proposal files compiled and rescanned successfully.
+The SQL download regression also covers multiple proposals in one method,
+Unicode and CRLF preservation. Dependency directories and JARs resolved through
+the upload UI. Screenshots were checked at desktop and mobile widths.
+
+CI is configured to run the same checks for future pushes and pull requests.
+Application-specific behavior after applying a proposal still requires that
+application's own tests.
+
+## Detector baseline recorded 2026-11-11
 
 The final code passed on installed JDK 17 and JDK 21:
 
@@ -181,6 +269,7 @@ FNR is `FN/(TP+FN)`, FPR is `FP/(FP+TN)`, precision is `TP/(TP+FP)`;
 empty denominators are `N/A`.
 
 Application behavior preservation after repairs is unmeasured. Existing repair
-tests check transformations and compilation; the team should run application
-behavior tests before accepting proposals. No identical-input comparison against
-another analyzer is claimed.
+tests check transformations, downloaded-source compilation and rescanning.
+Runtime checks verify literal argument handling with harmless Java child
+processes. Run application behavior tests before accepting proposals. No
+identical-input comparison against another analyzer is claimed.

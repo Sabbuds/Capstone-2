@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -68,6 +69,11 @@ public final class UiServer {
                 send(exchange, 403, "application/json", error("Forbidden host"));
                 return;
             }
+            String origin = exchange.getRequestHeaders().getFirst("Origin");
+            if (origin != null && !origin.equals("http://" + host)) {
+                send(exchange, 403, "application/json", error("Forbidden origin"));
+                return;
+            }
             handler.handle(exchange);
         } catch (IllegalArgumentException e) {
             send(exchange, 400, "application/json", error(e.getMessage()));
@@ -109,6 +115,7 @@ public final class UiServer {
 
     /** GET ?target=relative/path scans a repository path; POST scans uploaded files ("urlencodedName\tbase64" per line). */
     private void scan(HttpExchange exchange) throws IOException {
+        List<Path> classpath = classpath(query(exchange, "classpath"));
         Map<String, String> sources = new LinkedHashMap<>(), resources = new LinkedHashMap<>();
         if (exchange.getRequestMethod().equals("POST")) {
             readUpload(exchange.getRequestBody(), sources, resources);
@@ -122,10 +129,26 @@ public final class UiServer {
             ScanService.read(root, path, sources, resources);
         }
         if (sources.isEmpty()) throw new IllegalArgumentException("Upload at least one .java file");
-        ScanService.Report report = service.scan(sources, resources);
+        ScanService.Report report = service.scan(sources, resources, classpath);
         boolean labeled = !report.cases().isEmpty();
         List<ScanService.LabeledCase> cases = labeled ? report.cases() : corpus();
-        send(exchange, 200, "application/json", toJson(report, cases, labeled ? "scan" : "corpus"));
+        send(exchange, 200, "application/json", toJson(report, cases, labeled ? "scan" : "corpus", classpath));
+    }
+
+    private List<Path> classpath(String input) throws IOException {
+        var entries = new LinkedHashSet<Path>();
+        if (input != null) {
+            for (String line : input.split("\\R")) {
+                if (line.isBlank()) continue;
+                Path path = root.resolve(line.strip()).normalize();
+                if (!Files.isReadable(path) || !(Files.isDirectory(path)
+                        || Files.isRegularFile(path) && path.toString().toLowerCase(Locale.ROOT).endsWith(".jar"))) {
+                    throw new IllegalArgumentException("Dependency must be a readable JAR or class directory: " + line.strip());
+                }
+                entries.add(path.toRealPath());
+            }
+        }
+        return List.copyOf(entries);
     }
 
     private synchronized List<ScanService.LabeledCase> corpus() throws IOException {
@@ -143,7 +166,9 @@ public final class UiServer {
             String name = URLDecoder.decode(line.substring(0, tab), StandardCharsets.UTF_8).replace('\\', '/');
             String text = new String(Base64.getDecoder().decode(line.substring(tab + 1).strip()), StandardCharsets.UTF_8);
             String lower = name.toLowerCase(Locale.ROOT);
-            if (lower.endsWith(".java")) sources.put(name, text);
+            if (lower.endsWith(".java")) {
+                if (sources.putIfAbsent(name, text) != null) throw new IllegalArgumentException("Duplicate source filename: " + name);
+            }
             else if (ScanService.isResource(lower)) ScanService.addResource(resources, name, text);
             else throw new IllegalArgumentException("Unsupported file type: " + name);
         }
@@ -161,11 +186,14 @@ public final class UiServer {
         return null;
     }
 
-    private static String toJson(ScanService.Report report, List<ScanService.LabeledCase> cases, String scoreSource) {
+    private static String toJson(ScanService.Report report, List<ScanService.LabeledCase> cases, String scoreSource, List<Path> classpath) {
         Map<String, ScanService.Score> scores = ScanService.tally(cases);
         Json json = new Json().open('{');
         json.key("complete").raw(Boolean.toString(report.complete()));
         json.key("commandProfile").value(ScanService.commandProfile());
+        json.key("classpath").open('[');
+        classpath.forEach(path -> json.value(path.toString()));
+        json.close(']');
         json.key("files").open('[');
         report.sources().forEach((name, source) -> json.open('{').key("name").value(name).key("source").value(source).close('}'));
         json.close(']').key("findings").open('[');

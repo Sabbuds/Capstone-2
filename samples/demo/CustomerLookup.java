@@ -8,7 +8,7 @@ import java.sql.Statement;
 /** Demo: SQL injection. Two findings the tool repairs, one it correctly refuses, one safe method. */
 public class CustomerLookup {
 
-    // Repaired automatically: the value becomes a bound ? parameter.
+    // Repair proposal: the value becomes a bound ? parameter.
     public void findByEmail(Connection conn, String email) throws Exception {
         Statement stmt = conn.createStatement();
         // EXPECT_SQLI
@@ -18,7 +18,7 @@ public class CustomerLookup {
         }
     }
 
-    // Repaired automatically: both values become bound parameters.
+    // Repair proposal: both values become bound parameters.
     public void updateTier(Connection conn, String customerId, String tier) throws Exception {
         Statement stmt = conn.createStatement();
         // EXPECT_SQLI

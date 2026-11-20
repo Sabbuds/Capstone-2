@@ -25,13 +25,29 @@ try {
     $sources = @((Get-ChildItem src,samples -Filter '*.java' -Recurse).FullName)
     & $compilerPath -Xlint:all --release 17 -sourcepath 'src;samples' -d out $sources
     if ($LASTEXITCODE -ne 0) { throw 'Java compilation failed.' }
-    foreach ($suite in 'SqliDetectionTest','CommandInjectionTest','DetectorContractTest','SqliRepairTest','SecurityIntegrationTest','DetectionEvaluationTest') {
+    foreach ($suite in 'SqliDetectionTest','CommandInjectionTest','DetectorContractTest','SqliRepairTest',
+        'CommandInjectionRepairTest','CommandInjectionRuntimeTest','SecurityIntegrationTest','DetectionEvaluationTest','UiScanServiceTest') {
         & $javaPath -cp out "edu.fiu.capstone.skeleton.$suite"
         if ($LASTEXITCODE -ne 0) { throw "$suite failed." }
     }
     & $javaPath -cp out edu.fiu.capstone.skeleton.DetectionEvaluation
     if ($LASTEXITCODE -ne 0) { throw 'Development corpus evaluation failed.' }
-    Write-Output 'All security suites passed. Sample command methods were not executed.'
+    if (!(Get-Command node -ErrorAction SilentlyContinue) -or !(Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+        throw 'Node.js 20+ and npm are required for browser tests. Install Node.js LTS and rerun this command.'
+    }
+    if (!(Test-Path 'node_modules/playwright-core/package.json')) {
+        & npm.cmd ci --ignore-scripts --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { throw 'Browser test dependency installation failed.' }
+    }
+    $previousJavaHome = $env:JAVA_HOME
+    try {
+        $env:JAVA_HOME = Split-Path -Parent $javaBin
+        & npm.cmd run test:ui
+        if ($LASTEXITCODE -ne 0) { throw 'Browser tests failed.' }
+    } finally {
+        $env:JAVA_HOME = $previousJavaHome
+    }
+    Write-Output 'All Java and browser suites passed. Runtime checks used harmless Java child processes.'
 } finally {
     $env:PATH = $previousPath
     Pop-Location
