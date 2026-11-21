@@ -6,6 +6,8 @@ and data-flow analysis. Scanned code is never executed; annotation processing
 and bytecode generation are disabled. No third-party runtime dependencies are
 required.
 
+**AI disclosure:** We used AI coding assistance to help implement, refactor and test the project.
+
 ## Start the UI on Windows
 
 Install a JDK 17 or 21. From PowerShell in this repository, run:
@@ -273,3 +275,30 @@ tests check transformations, downloaded-source compilation and rescanning.
 Runtime checks verify literal argument handling with harmless Java child
 processes. Run application behavior tests before accepting proposals. No
 identical-input comparison against another analyzer is claimed.
+
+## Credits and third-party licenses
+
+Our team wrote the scanner, repair strategies, web interface, charts, reports,
+synthetic examples and project tests, with AI coding assistance. The project
+uses the following software and evaluation material. The license names apply
+to the identified components and versions. Each component retains its own
+license and bundled third-party notices.
+
+| Piece and source | License | Use in this project |
+| --- | --- | --- |
+| [Team application and synthetic samples](https://github.com/Sabbuds/Capstone-2/tree/UI) | **Written by our team**, with AI coding assistance | Detection, repair proposals, UI, custom charts, reporting, demonstration fixtures and tests. |
+| [Oracle JDK 21.0.12](https://www.oracle.com/downloads/licenses/no-fee-license.html) | Oracle No-Fee Terms and Conditions (NFTC), as included with the local installation | Runs the local scanner. Compiler APIs parse Java source and the built-in HTTP server serves the UI. |
+| [Eclipse Temurin JDK 17 and 21](https://adoptium.net/docs/faq) | GNU GPL version 2 with the Classpath Exception | Java runtimes and compilers used by GitHub Actions compatibility tests. |
+| [Playwright Core 1.65.1](https://github.com/microsoft/playwright/blob/main/LICENSE) | Apache License 2.0 | Browser automation for upload, repair-preview, download, report and layout tests. This is a development dependency. |
+| [Node.js](https://github.com/nodejs/node/blob/main/LICENSE) | MIT, with additional notices for bundled components | Runs the browser-test script. CI uses Node.js 22. |
+| [npm CLI](https://github.com/npm/cli/blob/latest/LICENSE) | Artistic License 2.0, with additional notices for dependencies | Installs locked development dependencies and runs browser tests. |
+| [Microsoft Edge](https://explore.microsoft.com/edge/terms) | Microsoft Edge Software License Terms | Browser used for the local UI and automated browser tests. |
+| [GitHub and GitHub Actions](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service) | GitHub Terms of Service and applicable product terms | Repository hosting, pull requests and automated test execution. |
+| [actions/checkout v6](https://github.com/actions/checkout/blob/v6/LICENSE) | MIT | Checks out the repository on test runners. |
+| [actions/setup-java v5](https://github.com/actions/setup-java/blob/v5/LICENSE) | MIT | Installs and selects Temurin JDK 17 and 21 in CI. |
+| [actions/setup-node v4](https://github.com/actions/setup-node/blob/v4/LICENSE) | MIT | Configures Node.js for browser tests in CI. |
+| [OWASP Benchmark Java v1.2](https://github.com/OWASP-Benchmark/BenchmarkJava/tree/db99977cbf6b30236089a691136d718aa7bb6935), including original Java cases, helper sources, resources and expected labels | GNU GPL version 2. The fetch script retains the upstream [LICENSE](https://github.com/OWASP-Benchmark/BenchmarkJava/blob/db99977cbf6b30236089a691136d718aa7bb6935/LICENSE). | External labeled evaluation material downloaded into the ignored benchmark cache. The source revision is pinned and SHA-256 manifests verify downloaded inputs. |
+| [OpenAI Codex](https://openai.com/policies/terms-of-use/) | Applicable OpenAI terms | AI coding assistance during implementation, refactoring, testing and documentation. |
+
+The UI uses system fonts and project-authored charts and symbols.
+Keep this list current when dependencies or demo assets change.
