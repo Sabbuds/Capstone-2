@@ -1,0 +1,13 @@
+{
+  "name": "capstone-security-scanner-tests",
+  "private": true,
+  "scripts": {
+    "test:ui": "node scripts/test-ui.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.1"
+  }
+}

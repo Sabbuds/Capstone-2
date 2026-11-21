@@ -15,6 +15,12 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
-      - name: Build, regression tests and development evaluation
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install browser test dependency
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build and test detectors, repairs and browser UI
         shell: pwsh
         run: ./scripts/test.ps1 -JavaHome $env:JAVA_HOME
