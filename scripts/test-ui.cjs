@@ -106,6 +106,22 @@ async function main() {
       assert.match(await page.locator('body').innerText(), /Repair proposals/);
       assert.doesNotMatch(await page.locator('body').innerText(), /Fixed automatically/);
     });
+    await check('built-in regression suites run from the UI and preserve scan results', async () => {
+      assert.equal((await page.request.get(base + '/api/regression')).status(), 405);
+      assert.equal((await page.request.post(base + '/api/regression', {
+        headers: { Origin: 'https://example.invalid' }
+      })).status(), 403);
+      const pending = page.waitForResponse(r => new URL(r.url()).pathname === '/api/regression', { timeout: 150000 });
+      await page.getByRole('button', { name: 'Run regression tests' }).click();
+      const response = await pending;
+      const result = await response.json();
+      assert.equal(response.status(), 200, JSON.stringify(result));
+      assert.equal(result.status, 'passed', result.output);
+      await page.waitForFunction(() => document.querySelector('#regression-status').textContent.includes('passed'));
+      await page.getByText('Test output', { exact: true }).click();
+      assert.match(await page.locator('#regression-output').innerText(), /All Java regression suites passed/);
+      assert.equal(await page.locator('details.finding').count(), 5);
+    });
     await check('SQL repair preview and source navigation', async () => {
       await scan(page, 'samples/demo/CustomerLookup.java', 3, 2);
       await page.getByRole('button', { name: 'Expand all', exact: true }).click();

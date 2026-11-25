@@ -117,6 +117,8 @@ button:disabled, select:disabled { opacity: 0.6; cursor: not-allowed; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
 .card h2 { font-size: 15px; margin: 0 0 4px; }
 .card .sub { color: var(--ink-2); margin: 0 0 12px; font-size: 13px; }
+#regression-result { margin-bottom: 16px; }
+#regression-output { max-height: 320px; overflow: auto; font: 12px/1.5 var(--mono); }
 .card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
 .card-head h2 { margin: 0; }
 .card-head .seg { margin: 0; }
@@ -256,6 +258,7 @@ table.cm td button[aria-pressed="true"] { background: var(--surface-2); font-wei
       <div class="meta-row">
         <span class="pill off" id="profile-badge"><span class="pill-icon" aria-hidden="true">–</span>Command repair: checking…</span>
         <button class="pill" id="theme" type="button" aria-label="Color theme: automatic. Select to change.">Theme: Auto</button>
+        <button class="pill" id="regression" type="button" aria-controls="regression-result">Run regression tests</button>
       </div>
     </div>
     <div class="picker">
@@ -277,6 +280,14 @@ table.cm td button[aria-pressed="true"] { background: var(--surface-2); font-wei
     </div>
   </header>
 
+  <section class="card" id="regression-result" aria-labelledby="regression-heading" hidden>
+    <h2 id="regression-heading">Scanner regression tests</h2>
+    <p class="sub" id="regression-status" role="status"></p>
+    <details id="regression-log" hidden>
+      <summary>Test output</summary>
+      <pre id="regression-output" tabindex="0"></pre>
+    </details>
+  </section>
   <div class="status-line" id="status" hidden><span class="spinner" aria-hidden="true"></span><span id="status-text" role="status"></span><span class="muted" id="status-time" aria-hidden="true"></span></div>
   <div id="notices"></div>
   <div id="content"><div class="empty">Choose a sample, upload Java files, or drop a project folder anywhere on this page.</div></div>
@@ -538,6 +549,29 @@ function scanUrl(target) {
   const classpath = $("classpath").value.trim();
   if (classpath) params.set("classpath", classpath);
   return "/api/scan" + (params.size ? "?" + params : "");
+}
+
+async function runRegressionTests() {
+  const button = $("regression"), status = $("regression-status"), log = $("regression-log");
+  button.disabled = true;
+  $("regression-result").hidden = false;
+  log.hidden = true;
+  log.open = false;
+  status.textContent = "Running the scanner’s built-in Java tests…";
+  try {
+    const response = await fetch("/api/regression", { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Server returned ${response.status}`);
+    status.textContent = result.status === "passed" ? "All Java regression tests passed."
+      : result.status === "timed-out" ? "Regression tests timed out." : "Regression tests failed.";
+    $("regression-output").textContent = result.output;
+    log.hidden = !result.output;
+    log.open = result.status !== "passed";
+  } catch (err) {
+    status.textContent = "Could not run regression tests. " + err.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /* entries: [{ path, file }] from the file picker, the folder picker, or drag and drop */
@@ -1187,6 +1221,7 @@ $("folder").addEventListener("change", e => {
   if (entries.length) uploadEntries(entries);
 });
 $("theme").addEventListener("click", () => applyTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]));
+$("regression").addEventListener("click", runRegressionTests);
 
 const hasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
 let dragDepth = 0;

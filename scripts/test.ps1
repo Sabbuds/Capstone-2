@@ -25,13 +25,8 @@ try {
     $sources = @((Get-ChildItem src,samples -Filter '*.java' -Recurse).FullName)
     & $compilerPath -Xlint:all --release 17 -sourcepath 'src;samples' -d out $sources
     if ($LASTEXITCODE -ne 0) { throw 'Java compilation failed.' }
-    foreach ($suite in 'SqliDetectionTest','CommandInjectionTest','DetectorContractTest','SqliRepairTest',
-        'CommandInjectionRepairTest','CommandInjectionRuntimeTest','SecurityIntegrationTest','DetectionEvaluationTest','UiScanServiceTest') {
-        & $javaPath -cp out "edu.fiu.capstone.skeleton.$suite"
-        if ($LASTEXITCODE -ne 0) { throw "$suite failed." }
-    }
-    & $javaPath -cp out edu.fiu.capstone.skeleton.DetectionEvaluation
-    if ($LASTEXITCODE -ne 0) { throw 'Development corpus evaluation failed.' }
+    & $javaPath -cp out edu.fiu.capstone.skeleton.RegressionTests
+    if ($LASTEXITCODE -ne 0) { throw 'Java regression tests failed.' }
     if (!(Get-Command node -ErrorAction SilentlyContinue) -or !(Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
         throw 'Node.js 20+ and npm are required for browser tests. Install Node.js LTS and rerun this command.'
     }
