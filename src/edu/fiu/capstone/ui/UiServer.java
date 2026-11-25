@@ -2,6 +2,8 @@ package edu.fiu.capstone.ui;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import edu.fiu.capstone.skeleton.RegressionTests;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 /**
@@ -27,6 +30,7 @@ import java.util.stream.Stream;
  */
 public final class UiServer {
     private static final int MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_TEST_OUTPUT_BYTES = 64 * 1024;
 
     private final Path root;
     private final int port;
@@ -55,6 +59,7 @@ public final class UiServer {
         server.createContext("/", exchange -> handle(exchange, this::page));
         server.createContext("/api/targets", exchange -> handle(exchange, this::targets));
         server.createContext("/api/scan", exchange -> handle(exchange, this::scan));
+        server.createContext("/api/regression", exchange -> handle(exchange, this::regression));
         server.setExecutor(Executors.newSingleThreadExecutor());
         server.start();
         System.out.println("Security scanner UI running at http://localhost:" + port + "  (Ctrl+C to stop)");
@@ -91,6 +96,51 @@ public final class UiServer {
             return;
         }
         send(exchange, 200, "text/html; charset=utf-8", Files.readString(root.resolve("ui/index.html")));
+    }
+
+    private void regression(HttpExchange exchange) throws IOException, InterruptedException {
+        if (!exchange.getRequestMethod().equals("POST")) {
+            exchange.getResponseHeaders().set("Allow", "POST");
+            send(exchange, 405, "application/json", error("Use POST to run regression tests"));
+            return;
+        }
+        if (exchange.getRequestHeaders().getFirst("Origin") == null) {
+            send(exchange, 403, "application/json", error("A same-origin request is required"));
+            return;
+        }
+        Path bin = Path.of(System.getProperty("java.home"), "bin");
+        String executable = File.separatorChar == '\\' ? "java.exe" : "java";
+        var runner = new ProcessBuilder(bin.resolve(executable).toString(), "-Dfile.encoding=UTF-8",
+                "-cp", System.getProperty("java.class.path"), RegressionTests.class.getName())
+                .directory(root.toFile()).redirectErrorStream(true);
+        var env = runner.environment();
+        String pathKey = env.keySet().stream().filter(key -> key.equalsIgnoreCase("PATH")).findFirst().orElse("PATH");
+        env.put(pathKey, bin + File.pathSeparator + env.getOrDefault(pathKey, ""));
+
+        Path log = Files.createTempFile("capstone-regression-", ".log");
+        try {
+            Process process = runner.redirectOutput(log.toFile()).start();
+            String status;
+            try {
+                status = process.waitFor(2, TimeUnit.MINUTES)
+                        ? (process.exitValue() == 0 ? "passed" : "failed") : "timed-out";
+            } finally {
+                if (process.isAlive()) {
+                    process.descendants().forEach(ProcessHandle::destroyForcibly);
+                    process.destroyForcibly().waitFor();
+                }
+            }
+            long omitted = Math.max(0, Files.size(log) - MAX_TEST_OUTPUT_BYTES);
+            try (InputStream input = Files.newInputStream(log)) {
+                input.skipNBytes(omitted);
+                String output = (omitted == 0 ? "" : "[Earlier output omitted]\n")
+                        + new String(input.readNBytes(MAX_TEST_OUTPUT_BYTES), StandardCharsets.UTF_8);
+                Json json = new Json().open('{').key("status").value(status).key("output").value(output).close('}');
+                send(exchange, 200, "application/json", json.toString());
+            }
+        } finally {
+            Files.deleteIfExists(log);
+        }
     }
 
     /** Lists scannable samples: each sample directory and each source file under samples/. */

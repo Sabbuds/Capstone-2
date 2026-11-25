@@ -21,6 +21,11 @@ Install a JDK 17 or 21. From PowerShell in this repository, run:
 Open http://localhost:8080. Stop the server with Ctrl+C. The app runs locally.
 Node.js is only needed for browser tests.
 
+Select **Run regression tests** to run the scanner's built-in Java suites and
+development corpus evaluation. The result and test output appear above the scan
+report. Use **Build and test everything** below to include browser tests. The
+scanner's tests do not verify the behavior of an uploaded application.
+
 Select a built-in sample, upload files, upload a folder, or drag a folder onto
 the page. Supply UTF-8 Java 17 source files ending in `.java`. Include related
 classes together for cross-file analysis. Supporting `.properties`, `.sh` and
